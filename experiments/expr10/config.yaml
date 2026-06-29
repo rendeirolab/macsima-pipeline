@@ -1,0 +1,17 @@
+# expr10 — worked example. Inherits from configs/default.yaml.
+extends: "../../configs/default.yaml"
+
+experiment:
+  name: "expr10"
+  raw_root: "/research/lab_rendeiro/projects/metpredict/data/MACSima/Expr 10_251010_480906/Expr10_2025-10-07_12-03-30/RawData/R1/C1"
+  roi_glob: "ROI*"
+  roi_exclude: ["ROI0"]
+  roi_metadata_csv: "experiments/expr10/roi_metadata.csv"
+
+mcmicro:
+  background_subtraction: false
+
+viz:
+  combinations: []
+    # - {name: "comb_immune",   markers: ["CD14", "CD11b", "DAPI"]}
+    # - {name: "comb_vascular", markers: ["Endomucin", "Cytokeratin_LMW", "VWF"]}

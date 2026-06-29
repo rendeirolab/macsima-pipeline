@@ -1,0 +1,62 @@
+# Python bytecode and packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.python-version
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test, lint, and coverage caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local environment and editor state
+.env
+.env.*
+.vscode/
+.idea/
+.claude/
+
+# Pipeline and Nextflow runtime state
+mcmicro_output/
+figures/
+logs/
+jobs/
+work/
+.nextflow*
+
+# Project outputs and large scientific data
+artifacts/
+*.sif
+*.simg
+*.zarr
+*.zarr/
+*.zarr.tar
+*.ome.tif
+*.ome.tiff
+*.h5ad
+*.h5
+*.hdf5
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.pdf
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

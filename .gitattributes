@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+# Scientific image/data artifacts are binary and should not be diffed.
+*.sif binary
+*.simg binary
+*.zarr/** binary
+*.zarr.tar binary
+*.ome.tif binary
+*.ome.tiff binary
+*.h5ad binary
+*.h5 binary
+*.hdf5 binary
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.tgz binary
+*.pdf binary

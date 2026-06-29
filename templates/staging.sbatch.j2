@@ -1,0 +1,20 @@
+#!/bin/bash
+#SBATCH --partition={{ slurm.partition }}
+#SBATCH --qos={{ slurm.qos }}
+#SBATCH --job-name=macsima_staging_{{ experiment }}
+#SBATCH --output={{ log_path }}
+#SBATCH --cpus-per-task={{ slurm.cpus }}
+#SBATCH --mem={{ slurm.mem }}
+#SBATCH --time={{ slurm.time }}
+{% if slurm.gres %}#SBATCH --gres={{ slurm.gres }}
+{% endif %}
+{% if slurm.comment %}#SBATCH --comment={{ slurm.comment }}
+{% endif %}
+{% if account %}#SBATCH --account={{ account }}
+{% endif %}
+
+set -euo pipefail
+module load apptainer
+
+# Each array task = one ROI from jobs CSV
+{{ body_cmd }}

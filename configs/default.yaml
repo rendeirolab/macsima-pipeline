@@ -1,0 +1,101 @@
+# Baseline pipeline config. Per-experiment configs should `extends: configs/default.yaml`
+# and override only what differs (typically `experiment.*` and a few paths).
+
+experiment:
+  name: REQUIRED          # short slug used in output filenames (e.g. expr10)
+  raw_root: REQUIRED      # absolute path to MACSima RawData/R*/C* folder containing ROI* subdirs
+  roi_glob: "ROI*"
+  roi_exclude: ["ROI0"]
+  roi_include: null       # null = include all matching roi_glob minus roi_exclude; or list of names
+  roi_metadata_csv: null  # optional CSV with columns ROI,Sample,Patient_ID,... joined into adata.obs
+
+paths:
+  work_dir: "."
+  staging_out: "mcmicro_output"
+  mcmicro_out: "mcmicro_output"
+  zarr_out: "artifacts/{experiment_name}/{experiment_name}_mcmicro{suffix}.zarr"
+  h5ad_out: "artifacts/{experiment_name}/{experiment_name}_cell_expression_mcmicro{suffix}.h5ad"
+  figures_dir: "figures/{experiment_name}"
+  jobs_dir: "jobs"
+  logs_dir: "logs"
+
+containers:
+  macsima2mc_sif: "macsima2mc.sif"
+  # multiplex_macsima_sif: "multiplex_macsima.sif"   # currently unused; uncomment if needed
+
+mcmicro:
+  params_yaml: "configs/mcmicro_params.yaml"
+  nextflow_config: null          # null = no -c flag; run nextflow locally per node, distribute via sbatch array
+  sample_pattern: "rack-*-well-*-roi-*-exp-2"
+  registration_pattern: "registration/*exp-2.ome.tif"
+  background_pattern: "background/*exp-2_backsub.ome.tif"
+  # true | false | "auto"
+  # "auto" runs whichever variant is present after mcmicro; if BOTH the
+  # background-subtracted and registration outputs exist, downstream stages
+  # (preprocess, viz) run twice — once per variant — and write distinct
+  # `{suffix}` outputs ("" for bg-sub, "_no_bs" for no-bg-sub).
+  background_subtraction: "auto"
+  markers_csv: "markers.csv"               # relative to each sample dir
+  markers_bs_csv: "background/markers_bs.csv"
+
+preprocess:
+  segmentation:
+    method: "cellpose4"
+    model: "cpsam"
+    channels: ["DAPI"]
+    min_area: 15
+    gpu: true
+  patches:
+    patch_width: null
+  scale_factors: [2, 4]
+
+viz:
+  target_max_dim: 2048          # pick pyramid level whose largest XY dim <= this
+  percentile_clip: [1, 99]
+  grid_ncols: 5
+  fig_size_per_panel: [5, 5]
+  grid_wspace: 0.04             # horizontal spacing as a fraction of panel width
+  grid_hspace: 0.12             # vertical spacing, including marker titles
+  panel_title_size: 7
+  figure_title_size: 12
+  output_pad_inches: 0.02
+  dpi: 300
+  output_format: "pdf"          # pdf|png
+  cmap: "gray"
+  rasterized: true              # rasterize imshow when saving PDF
+  pdf_compression: 9
+  combinations: []              # list of {name, markers: [m1, m2, m3]} for RGB plots
+  parallel:
+    workers: 8
+    roi_workers: 1              # ROI grids are memory-heavy; render sequentially by default
+    backend: "loky"
+  cache_percentiles: true       # persist (roi, marker) -> (p1,p99) to parquet for resume
+
+slurm:
+  account: null                 # optional --account
+  staging:
+    partition: "tinyq"
+    qos: "tinyq"
+    cpus: 8
+    mem: "32G"
+    time: "2:00:00"
+  mcmicro:
+    partition: "shortq"
+    qos: "shortq"
+    cpus: 16
+    mem: "64G"
+    time: "12:00:00"
+  preprocess:
+    partition: "gpu"
+    qos: "gpu"
+    gres: "gpu:1"
+    cpus: 16
+    mem: "100G"
+    time: "6:00:00"
+    comment: "skip_dcgm"
+  viz:
+    partition: "shortq"
+    qos: "shortq"
+    cpus: 8
+    mem: "100G"
+    time: "4:00:00"

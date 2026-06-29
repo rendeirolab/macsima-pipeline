@@ -1,0 +1,7 @@
+workflow:
+  start-at: registration
+  stop-at: registration
+  background: true
+  viz: false
+options:
+  ashlar: --flip-y
