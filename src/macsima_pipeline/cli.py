@@ -10,6 +10,7 @@ from pathlib import Path
 from cyclopts import App
 
 from . import mcmicro as mcmicro_stage
+from . import panel as panel_stage
 from . import preprocess as preprocess_stage
 from . import staging as staging_stage
 from .config import Config, load_config
@@ -36,13 +37,37 @@ def _load(cfg_path: Path) -> Config:
 # --------------------------------------------------------------------------- #
 
 
-@app.command(sort_key=1)
-def stage(config: Path, submit: bool = False, dependency: int | None = None) -> int | None:
-    """Stage 1: discover ROIs and submit `macsima2mc` array job."""
-    banner("Stage 1 — staging (macsima2mc)", subtitle=str(config))
+@app.command(sort_key=0)
+def panel(config: Path) -> None:
+    """Pre-staging: sanity-check the acquired marker panel (writes artifacts/<exp>/marker_panel.csv)."""
+    banner("Marker panel — sanity check", subtitle=str(config))
     cfg = _load(config)
+    mp = panel_stage.generate(cfg)
+    log.info("marker panel -> [path]%s[/]", mp)
+
+
+@app.command(sort_key=1)
+def stage(
+    config: Path,
+    submit: bool = False,
+    dependency: int | None = None,
+    stage_roi: bool = False,
+    task_id: int | None = None,
+) -> int | None:
+    """Stage 1: generate the marker panel, then stage raw MACSima cycles natively (per-ROI array).
+
+    With --stage-roi --task-id N, stage a single ROI in the current process — this is what each
+    SLURM array task re-invokes.
+    """
+    cfg = _load(config)
+    if stage_roi:
+        if task_id is None:
+            raise ValueError("--stage-roi requires --task-id")
+        staging_stage.stage_roi_inproc(cfg, task_id)
+        return None
+    banner("Stage 1 — staging (native)", subtitle=str(config))
     dep = str(dependency) if dependency else None
-    return staging_stage.run(cfg, do_submit=submit, dependency=dep)
+    return staging_stage.run(cfg, config.resolve(), do_submit=submit, dependency=dep)
 
 
 @app.command(sort_key=2)
@@ -154,7 +179,7 @@ def run_all(config: Path, submit: bool = False) -> None:
     cfg = _load(config)
     if not submit:
         # Dry-run: just emit each plan
-        staging_stage.run(cfg, do_submit=False)
+        staging_stage.run(cfg, config.resolve(), do_submit=False)
         mcmicro_stage.run(cfg, do_submit=False)
         preprocess_stage.run(cfg, config.resolve(), do_submit=False)
         log.warning("[warn](dry-run)[/] viz plan would be rendered after preprocess submit")
@@ -162,7 +187,7 @@ def run_all(config: Path, submit: bool = False) -> None:
 
     config_path = config.resolve()
 
-    j1 = staging_stage.run(cfg, do_submit=True)
+    j1 = staging_stage.run(cfg, config_path, do_submit=True)
     j2 = submit_mcmicro_launcher(cfg, config_path, dependency=str(j1))
     j3 = preprocess_stage.run(cfg, config_path, do_submit=True, dependency=str(j2))
 

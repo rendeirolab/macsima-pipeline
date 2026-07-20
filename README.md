@@ -30,7 +30,8 @@ One YAML config per experiment. One CLI (`macsima-pipeline`) drives four stages:
 
 ```
 raw MACSima cycles (per ROI)
-        │  stage   (apptainer macsima2mc.sif, SLURM array, 1 task per ROI)
+        │  panel   (sanity-check marker panel — at plan time)
+        │  stage   (native: tifffile + ome-types + BaSiCPy; SLURM array, 1 task per ROI)
         ▼
 mcmicro_output/{exp}/rack-…-roi-…-exp-2/   ← mcmicro-ingestable per-sample dirs
         │  mcmicro (Nextflow + Singularity, SLURM array, 1 task per sample)
@@ -66,21 +67,23 @@ experiments/
 src/macsima_pipeline/
   cli.py                  cyclopts CLI entrypoints
   config.py               pydantic schema + extends/merge loader
-  staging.py              stage 1
+  staging.py              stage 1 orchestration (SLURM array; runs panel at plan time)
+  staging_core.py         native macsima2mc port: parse → stack → OME-TIFF + markers.csv (+BaSiCPy)
+  panel.py                pre-staging marker panel sanity check
   mcmicro.py              stage 2
   preprocess.py           stage 3 (run_inproc + sbatch wrapper)
   viz/                    stage 4 (workers + plotting)
   slurm.py                sbatch render + sbatch submit
 jobs/                     generated per-stage csv + sbatch (gitignored)
 logs/                     SLURM stdout/stderr (gitignored)
-macsima2mc.sif            apptainer image (not in repo — see Install)
+artifacts/{exp}/          marker_panel.csv, zarr/h5ad (gitignored)
 ```
 
 ---
 
 ## 3. Install
 
-Prereqs on the cluster: `apptainer` (a.k.a. singularity), Nextflow (for mcmicro), `uv`.
+Prereqs on the cluster: `uv`; plus Nextflow + `apptainer`/singularity **for the mcmicro stage only** — staging is now native Python and needs no container.
 
 ```bash
 # 1. Clone
@@ -89,11 +92,7 @@ git clone <repo> && cd macsima-pipeline
 # 2. Python env (uv reads pyproject.toml + uv.lock)
 uv sync
 
-# 3. Containers — not bundled. Pull macsima2mc:
-module load apptainer
-apptainer pull macsima2mc.sif docker://ghcr.io/schapirolabor/macsima2mc:v1.3.1
-
-# 4. Verify
+# 3. Verify (staging is native — no macsima2mc container to pull)
 uv run macsima-pipeline --help
 ```
 
@@ -203,9 +202,26 @@ Stage outputs are deterministic per (config, raw data). To redo just one stage, 
 
 ## 5. Pipeline stages in detail
 
+### Stage 0 — `panel` (runs automatically before `stage`)
+
+From the raw filenames alone (fast, no pixel reads) writes `artifacts/<exp>/marker_panel.csv`
+(per-cycle panel summary — sanity-check that the run acquired what you expect) and validates the
+panel: reference marker present in every cycle, consistent markers across ROIs, background
+acquisitions present. `stage` runs this at plan time; run it standalone with
+`macsima-pipeline panel --config …`. (Cell-type signatures for phenotyping are produced
+separately — see the phenotype stage / `gen-signature`.)
+
 ### Stage 1 — `stage`
 
-Calls `macsima2mc.py` (inside `macsima2mc.sif`) once per **(ROI × cycle)**. Discovers ROIs via `experiment.raw_root` + `experiment.roi_glob` minus `roi_exclude`. Writes `jobs/staging_<exp>.csv` (one row per ROI = one SLURM array task). Output: `mcmicro_output/<exp>/rack-X-well-Y-roi-Z-exp-2/` per-sample dirs ready for mcmicro.
+Native Python — no container. `staging_core.py` reimplements macsima2mc v1.3.1 with `tifffile` +
+`ome-types`. Discovers ROIs via `experiment.raw_root` + `experiment.roi_glob` minus `roi_exclude`,
+writes `jobs/staging_<exp>.csv` (one row per ROI = one SLURM array task); each task stages every
+`*Cycle*` folder of its ROI. Per cycle it parses the MACSima filenames, groups tiles by
+`(source, exposure_level)`, orders channels reference-marker-first (backfilling DAPI into exposure
+levels that didn't reacquire it), optionally applies BaSiCPy flatfield correction
+(`staging.illumination_correction`, default on → `corr_` prefix), and writes multi-series
+OME-TIFFs + `markers.csv` to `mcmicro_output/<exp>/rack-X-well-Y-roi-Z-exp-N/`. Behaviour is
+tunable under `staging:` in the config; output is drop-in compatible with the previous container.
 
 ### Stage 2 — `mcmicro`
 
@@ -324,4 +340,4 @@ Percentile cache is parquet under `figures/<exp>/`; deleting it forces re-comput
 
 ## License / containers
 
-`macsima2mc.sif` (ghcr.io/schapirolabor/macsima2mc) and the mcmicro images carry their own licenses. This repo bundles only orchestration code.
+The native staging code is a reimplementation of [macsima2mc](https://github.com/SchapiroLabor/macsima2mc) (BSD-3-Clause). The mcmicro images (pulled by Nextflow for stage 2) carry their own licenses. This repo bundles only orchestration code.

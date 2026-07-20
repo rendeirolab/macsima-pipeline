@@ -1,7 +1,12 @@
 """Stage 1: stage raw MACSima cycles into mcmicro-ingestable per-ROI folders.
 
-Port of `scripts/create_staging_jobs.sh` + `scripts/staging.sh` from the original
-`metpredict-macsima` repo.
+Native Python reimplementation of the former macsima2mc Docker/apptainer step (see
+:mod:`macsima_pipeline.staging_core`). One SLURM array task per ROI re-invokes the CLI
+(``stage --stage-roi``) which stages every cycle of that ROI in-process — the same
+callback pattern used by the preprocess and viz stages.
+
+The marker-panel + cell-type signature template are generated at plan time (before the array
+is submitted) by :mod:`macsima_pipeline.panel`.
 """
 
 from __future__ import annotations
@@ -9,6 +14,7 @@ from __future__ import annotations
 import csv
 import logging
 import shlex
+import sys
 from pathlib import Path
 
 from .config import Config
@@ -38,9 +44,8 @@ def write_jobs_csv(cfg: Config, rois: list[Path]) -> Path:
     ensure_dir(path.parent)
     output_dir = cfg.paths.work_dir / cfg.paths.staging_out
     with path.open("w", newline="") as f:
-        # lineterminator="\n" — default csv.writer emits \r\n per RFC 4180 which
-        # leaves a literal \r in the last field when bash `read` parses the row.
-        # That \r broke apptainer mounts ("mount source …/mcmicro_output\r doesn't exist").
+        # lineterminator="\n" — default csv.writer emits \r\n per RFC 4180; a trailing \r once
+        # broke path handling in the bash body. Harmless to keep now that we read it in Python.
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["job_id", "roi_path", "roi_name", "sample_id", "output_dir"])
         for i, roi in enumerate(rois, start=1):
@@ -49,55 +54,75 @@ def write_jobs_csv(cfg: Config, rois: list[Path]) -> Path:
     return path
 
 
-def _body_cmd(cfg: Config) -> str:
-    """Bash body executed inside each SLURM array task."""
-    sif = cfg.containers.macsima2mc_sif
-    jobs_csv = cfg.jobs_csv("staging")
-    # Read CSV row matching $SLURM_ARRAY_TASK_ID then run apptainer per cycle.
-    return rf"""jobs_file={shlex.quote(str(jobs_csv))}
-job_line=$(awk -F',' -v task_id="$SLURM_ARRAY_TASK_ID" 'NR > 1 && $1 == task_id {{print; exit}}' "$jobs_file")
-if [ -z "$job_line" ]; then
-    echo "Error: no row for SLURM_ARRAY_TASK_ID=${{SLURM_ARRAY_TASK_ID}} in $jobs_file" >&2
-    exit 1
-fi
-job_line=${{job_line%$'\r'}}   # defensive: strip trailing CR if CSV ever has CRLF
-IFS=',' read -r job_id roi roi_name sample_id output_dir <<< "$job_line"
-
-mkdir -p "$output_dir"          # apptainer --bind requires source dir to exist
-output_dir=$(readlink -f "$output_dir")   # absolute path so --bind doesn't depend on cwd
-
-shopt -s nullglob
-echo "Staging ROI: $roi_name (task $SLURM_ARRAY_TASK_ID)"
-echo "  output_dir: $output_dir"
-
-for cycle in "$roi"/*Cycle*; do
-    cycle_folder=$(basename "${{cycle}}")
-    echo "  -> $cycle_folder"
-    apptainer exec \
-        --bind "${{roi}}:/mnt","${{output_dir}}:/media" --no-home \
-        {shlex.quote(str(sif))} \
-        macsima2mc -i "/mnt/${{cycle_folder}}" -o "/media/${{sample_id}}" -ic
-done
-
-echo "Done: $roi_name"
-"""
+def _read_job_row(jobs_csv: Path, task_id: int) -> dict[str, str]:
+    with jobs_csv.open(newline="") as f:
+        for row in csv.DictReader(f):
+            if int(row["job_id"]) == task_id:
+                return row
+    raise KeyError(f"no row for job_id={task_id} in {jobs_csv}")
 
 
-def plan(cfg: Config) -> tuple[Path, Path, int]:
-    """Discover ROIs, write jobs CSV, render sbatch. Return (csv, sbatch, n_jobs)."""
+def _body_cmd(cfg: Config, config_path: Path) -> str:
+    """Bash body for each SLURM array task: re-invoke the CLI to stage one ROI natively."""
+    python = Path(sys.executable)
+    work_dir = cfg.paths.work_dir.resolve()
+    return (
+        f"cd {shlex.quote(str(work_dir))}\n"
+        f"uv run --frozen --no-sync "
+        f"{shlex.quote(str(python))} -m macsima_pipeline.cli stage "
+        f"--config {shlex.quote(str(config_path))} --stage-roi --task-id $SLURM_ARRAY_TASK_ID"
+    )
+
+
+def stage_roi_inproc(cfg: Config, task_id: int) -> list[Path]:
+    """Stage one ROI (all its cycle folders) in the current process. Called by the SLURM task."""
+    from . import staging_core
+
+    row = _read_job_row(cfg.jobs_csv("staging"), task_id)
+    roi_dir = Path(row["roi_path"])
+    sample_root = cfg.staging_root()
+    st = cfg.staging
+    log.info("staging ROI [stage]%s[/] (task %d) -> [path]%s[/]", roi_dir.name, task_id, sample_root)
+    samples = staging_core.stage_roi(
+        roi_dir,
+        sample_root,
+        cycle_glob=st.cycle_glob,
+        ref_marker=st.reference_marker,
+        illumination_correction=st.illumination_correction,
+        hi_exposure_only=st.hi_exposure_only,
+        out_subdir=st.output_subdir,
+        remove_reference_marker=st.remove_reference_marker,
+    )
+    log.info("[ok]staged[/] ROI [stage]%s[/]: [count]%d[/] sample dir(s)", roi_dir.name, len(samples))
+    return samples
+
+
+def plan(cfg: Config, config_path: Path) -> tuple[Path, Path, int]:
+    """Generate the marker panel, discover ROIs, write jobs CSV, render sbatch."""
+    from . import panel
+
+    # Marker panel + cell-type signature template BEFORE staging (sanity check + scaffold).
+    panel.generate(cfg)
+
     rois = discover_rois(cfg)
     if not rois:
         raise RuntimeError(f"No ROIs found under {cfg.experiment.raw_root} matching {cfg.experiment.roi_glob}")
     csv_path = write_jobs_csv(cfg, rois)
-    ensure_dir(cfg.paths.work_dir / cfg.paths.staging_out)
+    ensure_dir(cfg.staging_root())
     ensure_dir(cfg.paths.work_dir / cfg.paths.logs_dir)
-    content = render_sbatch(cfg, "staging", array_size=len(rois), body_cmd=_body_cmd(cfg))
+    content = render_sbatch(cfg, "staging", array_size=len(rois), body_cmd=_body_cmd(cfg, config_path))
     sbatch = write_sbatch(cfg, "staging", content)
     return csv_path, sbatch, len(rois)
 
 
-def run(cfg: Config, *, do_submit: bool, dependency: str | None = None) -> int | None:
-    csv_path, sbatch, n = plan(cfg)
+def run(
+    cfg: Config,
+    config_path: Path,
+    *,
+    do_submit: bool,
+    dependency: str | None = None,
+) -> int | None:
+    csv_path, sbatch, n = plan(cfg, config_path)
     log.info(
         "staging plan: [count]%d[/] ROIs, csv=[path]%s[/] sbatch=[path]%s[/]",
         n, csv_path, sbatch,

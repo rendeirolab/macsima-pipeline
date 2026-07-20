@@ -18,6 +18,8 @@ dependencies = [
     "dask-image>=2025.11.0",
     "imagecodecs>=2025.11.11",
     "scikit-image>=0.25.2",
+    "ome-types>=0.5",
+    "basicpy>=2.0.0",
     "sopa>=2.1.10",
     "spatialdata>=0.4.0",
     "spatialdata-plot>=0.2.13",
@@ -62,6 +64,12 @@ target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv]
+# BaSiCPy pins scipy<1.13, but scanpy/spatialdata need scipy>=1.13. BaSiCPy 2.x does its
+# heavy lifting via torch/torch-dct, so we lift its stale scipy ceiling and rely on the
+# runtime-validated illumination-correction path. See staging_core.apply_illumination_correction.
+override-dependencies = ["scipy>=1.13"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }

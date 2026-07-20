@@ -14,7 +14,6 @@
 {% endif %}
 
 set -euo pipefail
-module load apptainer
 
-# Each array task = one ROI from jobs CSV
+# Each array task = one ROI; the CLI stages every cycle of that ROI natively (no container).
 {{ body_cmd }}

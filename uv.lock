@@ -1,11 +1,14 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version == '3.13.*'",
     "python_full_version < '3.13'",
 ]
+
+[manifest]
+overrides = [{ name = "scipy", specifier = ">=1.13" }]
 
 [[package]]
 name = "aiobotocore"
@@ -319,6 +322,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7d/b2/51899539b6ceeeb420d40ed3cd4b7a40519404f9baf3d4ac99dc413a834b/babel-2.18.0.tar.gz", hash = "sha256:b80b99a14bd085fcacfa15c9165f651fbb3406e66cc603abf11c5750937c992d", size = 9959554, upload-time = "2026-02-01T12:30:56.078Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/77/f5/21d2de20e8b8b0408f0681956ca2c69f1320a3848ac50e6e7f39c6159675/babel-2.18.0-py3-none-any.whl", hash = "sha256:e2b422b277c2b9a9630c1d7903c2a00d0830c409c59ac8cae9081c92f1aeba35", size = 10196845, upload-time = "2026-02-01T12:30:53.445Z" },
+]
+
+[[package]]
+name = "basicpy"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dask" },
+    { name = "hyperactive" },
+    { name = "numpy" },
+    { name = "pooch" },
+    { name = "pydantic" },
+    { name = "scikit-image" },
+    { name = "scipy" },
+    { name = "torch" },
+    { name = "torch-dct" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/ce/8aa1abe0c83933880d1af2610907ce68fa03d24b4e34d155d1e9ace8e571/basicpy-2.0.0.tar.gz", hash = "sha256:9d285b55e81908b9bb05850da54064066ae97c4ae8aefd28fac173fe4f605c17", size = 27936, upload-time = "2026-03-09T13:09:40.976Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/f7/871b23aaccee8221b0b049242f3549c69cbb798c09bbc2709a705a27a600/basicpy-2.0.0-py3-none-any.whl", hash = "sha256:fae0b24ed237fb8093830e02b1cc4e417b9542ccad19d9c741d7789808e60c16", size = 27793, upload-time = "2026-03-09T13:09:40.132Z" },
 ]
 
 [[package]]
@@ -1237,6 +1261,18 @@ wheels = [
 ]
 
 [[package]]
+name = "gradient-free-optimizers"
+version = "1.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/41/519c2ff1a45c39b90b5dee406cc88c3af5b11c5127f952282a1f9784243e/gradient_free_optimizers-1.13.0-py3-none-any.whl", hash = "sha256:863f8d0cbb7a553c8ec7853d92b3a8a2110c77e806edab88a373df3a152f8b46", size = 382482, upload-time = "2026-05-15T18:40:07.128Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1317,6 +1353,20 @@ wheels = [
 ]
 
 [[package]]
+name = "hyperactive"
+version = "4.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "gradient-free-optimizers" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "tqdm" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/8b/28695b813ef2646d59a6b7baa765f81ec5a4c5b32a7fa79e2ff5a73122ad/hyperactive-4.8.0-py3-none-any.whl", hash = "sha256:e767f2bc2224edf4a45ac08ff587cbc4b3ca2f69fafe3607925921bddea27a28", size = 30100, upload-time = "2024-08-14T14:58:42.6Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.17"
 source = { registry = "https://pypi.org/simple" }
@@ -1361,13 +1411,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/30/fe/ea18b0514128a60830c4909e23add385f8e799ff9719bc0b5de82673baa1/imagecodecs-2025.11.11-cp311-abi3-win32.whl", hash = "sha256:3735ea088321b0685e593c5d44fc1d146a84fcf6645c52ed136fa576e16c3572", size = 14847479, upload-time = "2025-11-10T04:20:17.502Z" },
     { url = "https://files.pythonhosted.org/packages/01/b8/287a2d64f746e3bdf44693d2013b5fb7440eafe1dca08a35a0fd30458d33/imagecodecs-2025.11.11-cp311-abi3-win_amd64.whl", hash = "sha256:4252b15f5ba55bc7d7aacf621f6bb6e73fd70e66d56277a1f26563198b2cd576", size = 19052271, upload-time = "2025-11-10T04:20:21.441Z" },
     { url = "https://files.pythonhosted.org/packages/a3/c8/413154b6014d9e1ee2b717bfdfa6617e81557b44487e2fb2a88ca3da125b/imagecodecs-2025.11.11-cp311-abi3-win_arm64.whl", hash = "sha256:f4480973fcf2d826ba6806b7ac6f4d9bd72eeb557cfd3687ac885939d130ec47", size = 14529653, upload-time = "2025-11-10T04:20:24.675Z" },
-    { url = "https://files.pythonhosted.org/packages/8c/2e/6a7117f2fe8e83c6ed58ad237625e4e82e139f67ce4695c457789e43cdc5/imagecodecs-2025.11.11-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:bb0f4714e60dd94b94ca778b872fb90b885b83381228743903035d79b7e91a88", size = 12448096, upload-time = "2025-11-10T04:20:27.739Z" },
-    { url = "https://files.pythonhosted.org/packages/24/96/0c479746198723c53326c65edf56331d8e910afaa2fa132358ca8d5a6177/imagecodecs-2025.11.11-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:faf4ab8f2f11694aa2d6ed7548ce1d1598a14e326a6bb3d50669ed5c7da764c6", size = 10433730, upload-time = "2025-11-10T04:20:30.113Z" },
-    { url = "https://files.pythonhosted.org/packages/b4/19/de48587d37aa2bc355313abdfdda801c7a26235ec66bfad19ff3ee0b7b23/imagecodecs-2025.11.11-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fdb475f54d0abac3cfcde42ec47f606eea1d4afa52173420577317102d361ae5", size = 25835500, upload-time = "2025-11-10T04:20:33.538Z" },
-    { url = "https://files.pythonhosted.org/packages/17/47/26edea4799c1250ad34305544fb69a65d6151dbe623508ed71537a678e7e/imagecodecs-2025.11.11-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e3d4cb2dc507c0bab057321333927575d1d611efe368e76b752f5ad3c55856ad", size = 25952929, upload-time = "2025-11-10T04:20:37.22Z" },
-    { url = "https://files.pythonhosted.org/packages/31/75/d720db7e0d654d3fd0db253ed8b8a83fad6d87735132fb01326c4f720fd7/imagecodecs-2025.11.11-cp314-cp314t-win32.whl", hash = "sha256:7bcc214d6f6ecd2bd7b648a6ac5589edcde946bcb738b6c763ce1c864934c58c", size = 15467675, upload-time = "2025-11-10T04:20:42.881Z" },
-    { url = "https://files.pythonhosted.org/packages/c0/fd/1a1eb89f9d1f9256d0fbb9f328607a1215710e19d4086bc602e8543423e4/imagecodecs-2025.11.11-cp314-cp314t-win_amd64.whl", hash = "sha256:58dbc0095142dcef55aaac392ee5bd8fb7c3656753e3c37424c3612209c656a4", size = 19915854, upload-time = "2025-11-10T04:20:46.006Z" },
-    { url = "https://files.pythonhosted.org/packages/59/27/2fa20c89149eed89949c34654bb3643f2aa229492e05fbd2ffadb5e4dc41/imagecodecs-2025.11.11-cp314-cp314t-win_arm64.whl", hash = "sha256:dd61871455ae6c3486051e68e0d576d54e53c45d157ce233c4a09269f132bf48", size = 15098090, upload-time = "2025-11-10T04:20:48.985Z" },
 ]
 
 [[package]]
@@ -1883,6 +1926,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
+    { name = "basicpy" },
     { name = "cellpose" },
     { name = "cyclopts" },
     { name = "dask-image" },
@@ -1892,6 +1936,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "multiscale-spatial-image" },
     { name = "numpy" },
+    { name = "ome-types" },
     { name = "pandas" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -1919,6 +1964,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anndata", specifier = ">=0.10" },
+    { name = "basicpy", specifier = ">=2.0.0" },
     { name = "cellpose", specifier = ">=4.0.8" },
     { name = "cyclopts", specifier = ">=3.0" },
     { name = "dask-image", specifier = ">=2025.11.0" },
@@ -1928,6 +1974,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "multiscale-spatial-image", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "ome-types", specifier = ">=0.5" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -4581,6 +4628,18 @@ wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu126/torch-2.12.0%2Bcu126-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:16f9187e12efffae37983c2edd7560cf7b1828bae84a30a3fd6733b3adcbdc6b", upload-time = "2026-05-12T23:40:51Z" },
     { url = "https://download-r2.pytorch.org/whl/cu126/torch-2.12.0%2Bcu126-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:6c1535d135828f839da6478bdfa94bcb4cf1dbd1bad06ca3d8ca07c94451348f", upload-time = "2026-05-12T23:41:20Z" },
     { url = "https://download-r2.pytorch.org/whl/cu126/torch-2.12.0%2Bcu126-cp314-cp314t-win_amd64.whl", hash = "sha256:ec030dd30287eda9338ee401dcca722758862337bd0cdb904325b8eeba5c2694", upload-time = "2026-05-12T23:42:43Z" },
+]
+
+[[package]]
+name = "torch-dct"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2c/12/518883ae7a1f0bd1039ddbb0ab3934a8cc8b1d609b47b1b7645eda59c72b/torch-dct-0.1.6.tar.gz", hash = "sha256:87923c4b8430206e37f1ccaa80386b8600d4f65921741399cb99afdb61a3731a", size = 4781, upload-time = "2022-11-06T16:09:49.882Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/88/3eef09f85bc6f22d78d820d8af91e3823a448fbee41ef53a35087297ed63/torch_dct-0.1.6-py3-none-any.whl", hash = "sha256:6ab1a064e7f138b649148c01e06cf0f0d354cdb3418ef0e04c81576ce9ba656b", size = 5142, upload-time = "2022-11-06T16:09:47.809Z" },
 ]
 
 [[package]]
