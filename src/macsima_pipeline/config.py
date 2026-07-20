@@ -189,46 +189,47 @@ class PhenotypeBatchCfg(BaseModel):
     min_cells_per_batch: int = 50
 
 
-class PhenotypeAstirCfg(BaseModel):
-    """Clean-room Astir engine (probabilistic per-cell assignment).
+class PhenotypeScyanCfg(BaseModel):
+    """Scyan engine (Bayesian normalizing-flow probabilistic per-cell assignment).
 
-    Consumes RAW intensities (`use_layer`): the model does its own
-    arcsinh/winsorize/z-score internally, so it must NOT receive pre-normalized
-    input. `cofactor` must match the MACSima fluorescence scale.
+    Consumes the arcsinh + per-marker z-scored layer (`use_layer`); the signature is
+    turned into a scyan knowledge table (population x marker, -1/1/NaN). Uses torch +
+    lightning, so a GPU (`device`) speeds training substantially.
     """
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
-    cofactor: float = 5.0
-    winsorize: tuple[float, float] = (0.0, 99.9)
-    max_epochs: int = 50
-    n_init: int = 5
-    learning_rate: float = 1e-3
-    batch_size: int = 16384
-    random_seed: int = 0
+    use_layer: str = "zscore"
+    max_epochs: int = 100
+    lr: float = 1e-3
+    prior_std: float = 0.25
+    hidden_size: int = 16
+    n_hidden_layers: int = 6
+    n_layers: int = 7
+    temperature: float = 0.5
+    max_samples: int | None = 200_000
     device: Literal["auto", "cpu", "cuda"] = "auto"
-    precision: Literal["fp32", "bf16"] = "fp32"
-    min_confidence: float = 0.7
-    use_layer: str = "counts"
-    include_batch_covariate: bool = True
+    log_prob_th: float = -50.0
+    min_confidence: float = 0.0
+    include_batch_covariate: bool = False
+    random_seed: int = 0
 
 
-class PhenotypeFlowsomCfg(BaseModel):
-    """FlowSOM engine (SOM + consensus metaclustering, then signature labeling).
+class PhenotypeLeidenCfg(BaseModel):
+    """Leiden engine (scanpy kNN graph + Leiden `flavor="igraph"`, then labeling).
 
-    Consumes the arcsinh + per-marker z-scored layer (`use_layer`).
+    Consumes the arcsinh + per-marker z-scored layer (`use_layer`); clusters are
+    auto-labeled against the signature matrix so labels are comparable to scyan's.
     """
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
-    grid_size: tuple[int, int] = (10, 10)
-    n_metaclusters: int = 30
-    som_iterations: int = 100
-    train_subsample: int | None = 200_000
-    scoring: Literal["signature_zscore", "signature_cosine"] = "signature_zscore"
+    use_layer: str = "zscore"
+    n_neighbors: int = 15
+    resolution: float = 1.0
+    n_iterations: int = 2
     tau: float = 0.0
     random_seed: int = 0
-    use_layer: str = "zscore"
 
 
 class PhenotypeSpatialQCCfg(BaseModel):
@@ -246,18 +247,18 @@ class PhenotypeSpatialQCCfg(BaseModel):
 
 
 class PhenotypeCfg(BaseModel):
-    """Stage 4: normalize + phenotype (Astir + FlowSOM) + spatial QC."""
+    """Stage 4: normalize + phenotype (scyan + Leiden) + spatial QC."""
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
     signature_matrix: Path | None = None
-    engines: list[Literal["astir", "flowsom"]] = Field(default_factory=lambda: ["astir", "flowsom"])
-    primary_engine: Literal["astir", "flowsom"] = "astir"
+    engines: list[Literal["scyan", "leiden"]] = Field(default_factory=lambda: ["scyan", "leiden"])
+    primary_engine: Literal["scyan", "leiden"] = "scyan"
     coarse_label_key: str = "cell_type_coarse"
     normalize: PhenotypeNormalizeCfg = PhenotypeNormalizeCfg()
     batch: PhenotypeBatchCfg = PhenotypeBatchCfg()
-    astir: PhenotypeAstirCfg = PhenotypeAstirCfg()
-    flowsom: PhenotypeFlowsomCfg = PhenotypeFlowsomCfg()
+    scyan: PhenotypeScyanCfg = PhenotypeScyanCfg()
+    leiden: PhenotypeLeidenCfg = PhenotypeLeidenCfg()
     spatial_qc: PhenotypeSpatialQCCfg = PhenotypeSpatialQCCfg()
 
 
@@ -293,7 +294,7 @@ class SlurmCfg(BaseModel):
                 time=self.preprocess.time,
             )
         if name == "phenotype" and self.phenotype is None:
-            # Default to the GPU preprocess stage — the Astir engine uses torch.
+            # Default to the GPU preprocess stage — the scyan engine uses torch.
             p = self.preprocess
             return SlurmStage(
                 partition=p.partition,

@@ -13,8 +13,8 @@ class EngineResult:
 
     labels        hard cell-type label per cell ("Unknown" when below threshold)
     confidence    per-cell confidence in [0, 1]
-    probabilities per-cell × cell-type probabilities (Astir); None for FlowSOM
-    cluster       metacluster id per cell (FlowSOM); None for Astir
+    probabilities per-cell × cell-type probabilities (scyan); None for Leiden
+    cluster       cluster id per cell (Leiden); None for scyan
     uns           engine params + diagnostics (serialized into uns['phenotype'])
     """
 

@@ -1,4 +1,4 @@
-"""Stage 4 orchestrator: normalize -> phenotype (Astir + FlowSOM) -> spatial QC.
+"""Stage 4 orchestrator: normalize -> phenotype (scyan + Leiden) -> spatial QC.
 
 Mirrors `viz/workers.run_inproc`: iterates background-subtraction variants, is tolerant
 of missing inputs in "auto" mode, and skips already-completed outputs (resume).
@@ -15,8 +15,8 @@ import pandas as pd
 
 from ..config import Config
 from . import io, normalize, signature, spatial_qc
-from .engines import astir as astir_engine
-from .engines import flowsom as flowsom_engine
+from .engines import leiden as leiden_engine
+from .engines import scyan as scyan_engine
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def _phenotype_adata(cfg: Config, adata, *, batch=None):
     sig = signature.load_signature(cfg.paths.work_dir / pcfg.signature_matrix)
     sig.validate_against(list(adata.var_names))
 
-    # --- normalization (Astir keeps raw; FlowSOM reads the normalized layer) ---
+    # --- normalization (raw stashed to counts; scyan + leiden read the normalized layer) ---
     normalize.stash_raw(adata, pcfg.normalize.store_raw_layer)
     normalize.normalize(adata, pcfg.normalize)
     normalize.apply_batch(adata, batch)
@@ -77,12 +77,12 @@ def _phenotype_adata(cfg: Config, adata, *, batch=None):
 
     # --- engines ---
     results = {}
-    if "astir" in pcfg.engines and pcfg.astir.enabled:
-        log.info("running astir engine")
-        results["astir"] = astir_engine.run_astir(adata, sig, pcfg.astir, batch.batch_key)
-    if "flowsom" in pcfg.engines and pcfg.flowsom.enabled:
-        log.info("running flowsom engine")
-        results["flowsom"] = flowsom_engine.run_flowsom(adata, sig, pcfg.flowsom, batch.batch_key)
+    if "scyan" in pcfg.engines and pcfg.scyan.enabled:
+        log.info("running scyan engine")
+        results["scyan"] = scyan_engine.run_scyan(adata, sig, pcfg.scyan, batch.batch_key)
+    if "leiden" in pcfg.engines and pcfg.leiden.enabled:
+        log.info("running leiden engine")
+        results["leiden"] = leiden_engine.run_leiden(adata, sig, pcfg.leiden, batch.batch_key)
     if not results:
         raise RuntimeError("no phenotype engines enabled")
 
@@ -92,16 +92,16 @@ def _phenotype_adata(cfg: Config, adata, *, batch=None):
     adata.obs["cell_type"] = pd.Categorical(primary.labels.astype(str))
     adata.obs["cell_type_confidence"] = primary.confidence.to_numpy(dtype=float)
     adata.obs[pcfg.coarse_label_key] = pd.Categorical(_coarse_labels(primary.labels.astype(str), coarse_map))
-    if "astir" in results:
-        adata.obs["astir_celltype"] = pd.Categorical(results["astir"].labels.astype(str))
-    if "flowsom" in results:
-        adata.obs["flowsom"] = pd.Categorical(results["flowsom"].cluster.astype(str))
-        adata.obs["flowsom_celltype"] = pd.Categorical(results["flowsom"].labels.astype(str))
+    if "scyan" in results:
+        adata.obs["scyan_celltype"] = pd.Categorical(results["scyan"].labels.astype(str))
+    if "leiden" in results:
+        adata.obs["leiden"] = pd.Categorical(results["leiden"].cluster.astype(str))
+        adata.obs["leiden_celltype"] = pd.Categorical(results["leiden"].labels.astype(str))
 
     agreement: dict = {}
-    if "astir" in results and "flowsom" in results:
+    if "scyan" in results and "leiden" in results:
         agree, agreement = spatial_qc.cross_engine_agreement(
-            results["astir"].labels.astype(str), results["flowsom"].labels.astype(str)
+            results["scyan"].labels.astype(str), results["leiden"].labels.astype(str)
         )
         adata.obs["pheno_agree"] = agree.to_numpy()
 
@@ -127,8 +127,8 @@ def _phenotype_adata(cfg: Config, adata, *, batch=None):
             },
             "normalize": pcfg.normalize.model_dump(),
             "batch": batch.model_dump(),
-            "astir": results["astir"].uns if "astir" in results else {},
-            "flowsom": results["flowsom"].uns if "flowsom" in results else {},
+            "scyan": results["scyan"].uns if "scyan" in results else {},
+            "leiden": results["leiden"].uns if "leiden" in results else {},
             "agreement": agreement,
             "spatial_qc": qc,
         }

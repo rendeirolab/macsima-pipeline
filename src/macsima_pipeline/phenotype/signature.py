@@ -3,7 +3,7 @@
 A small YAML artifact naming the expected positive (and optional negative) markers
 per cell type, with an optional lineage `parent`. This is the single knowledge input
 that replaces manually reading N markers across every cluster: both engines
-(Astir, FlowSOM) consume it, so their labels are directly comparable.
+(scyan, Leiden) consume it, so their labels are directly comparable.
 
 Schema (``version: 1``)::
 
@@ -82,13 +82,13 @@ class SignatureMatrix:
     # ---- engine inputs ----
 
     def to_marker_dict(self) -> dict[str, list[str]]:
-        """cell_type -> positive markers (Astir ``rho`` construction)."""
+        """cell_type -> positive markers."""
         return {name: list(ct.positive) for name, ct in self.cell_types.items()}
 
     def score_matrix(self, markers: list[str]) -> np.ndarray:
         """(K, M) signed matrix aligned to `markers`: +1 positive, -1 negative, else 0.
 
-        Used by FlowSOM metacluster scoring.
+        Drives the scyan knowledge table and Leiden cluster scoring.
         """
         idx = {m: i for i, m in enumerate(markers)}
         mat = np.zeros((len(self.cell_types), len(markers)), dtype=np.float32)

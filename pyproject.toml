@@ -25,21 +25,23 @@ dependencies = [
     "spatialdata-plot>=0.2.13",
     "squidpy>=1.6.6",
     "tifffile>=2024.0",
-    "anndata>=0.10",
-    # phenotype stage: scanpy (ComBat + utilities) and scikit-learn (metrics) are used
-    # directly; FlowSOM engine + its metaclustering. pandas pinned <3 because
-    # FlowSOM 0.2.x trips over pandas copy-on-write (read-only np.asarray).
+    "anndata>=0.12",
+    # phenotype stage: scanpy (ComBat + Leiden clustering) and scikit-learn (metrics)
+    # are used directly; scyan (normalizing-flow annotation) pulls torch + lightning;
+    # igraph backs scanpy's Leiden (flavor="igraph").
     "scanpy>=1.10",
     "scikit-learn>=1.4",
-    "flowsom>=0.2.1",
-    "pandas>=2.0,<3",
+    "scyan>=1.8",
+    "igraph>=0.10",
+    "pandas>=2.0",
     "numpy>=1.26",
     "matplotlib>=3.8",
     "tqdm>=4.66",
     "spatial-image>=1.1",
     "multiscale-spatial-image>=1.0",
     "rich>=13.7",
-    "torch>=2.0",
+    "torch>=2.2",
+    "lightning>=2.2",
     "torchvision>=0.15",
 ]
 

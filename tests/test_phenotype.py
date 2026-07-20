@@ -183,19 +183,19 @@ def test_batch_none_is_noop() -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  FlowSOM metacluster labeling (pure numpy; no flowsom package needed)       #
+#  Cluster labeling (pure numpy; no clustering package needed)                #
 # --------------------------------------------------------------------------- #
 
 
-def test_label_metaclusters_assigns_by_enrichment(tmp_path: Path) -> None:
-    from macsima_pipeline.phenotype.engines.flowsom import _label_metaclusters
+def test_label_clusters_assigns_by_enrichment(tmp_path: Path) -> None:
+    from macsima_pipeline.phenotype.engines._labeling import label_clusters
 
     sig = sig_mod.load_signature(_write_signature(tmp_path))
     markers = MARKERS  # DAPI CD3 CD8 CD4 CD19 CD68 CD45
     score = sig.score_matrix(markers)
     names = sig.cell_type_names()
 
-    # three metaclusters, each enriched for a distinct type's positives
+    # three clusters, each enriched for a distinct type's positives
     def cell(**vals):
         row = np.zeros(len(markers))
         for k, v in vals.items():
@@ -215,7 +215,7 @@ def test_label_metaclusters_assigns_by_enrichment(tmp_path: Path) -> None:
     z = np.array(rows)
     cluster_ids = np.array(ids)
 
-    labels, conf, label_map, scores = _label_metaclusters(z, cluster_ids, score, names, tau=0.0)
+    labels, conf, label_map, scores = label_clusters(z, cluster_ids, score, names, tau=0.0)
     assert label_map[0] == "CD8 T cell"
     assert label_map[1] == "B cell"
     assert label_map[2] == "Macrophage"
@@ -223,12 +223,13 @@ def test_label_metaclusters_assigns_by_enrichment(tmp_path: Path) -> None:
     assert scores.shape == (3, len(names))
 
 
-def test_run_flowsom_end_to_end(tmp_path: Path) -> None:
-    pytest.importorskip("flowsom")
+def test_run_leiden_end_to_end(tmp_path: Path) -> None:
+    pytest.importorskip("igraph")
+    pytest.importorskip("scanpy")
     import pandas as pd
 
-    from macsima_pipeline.config import PhenotypeFlowsomCfg
-    from macsima_pipeline.phenotype.engines import flowsom as fe
+    from macsima_pipeline.config import PhenotypeLeidenCfg
+    from macsima_pipeline.phenotype.engines import leiden as le
 
     ad = pytest.importorskip("anndata")
     rng = np.random.default_rng(0)
@@ -246,8 +247,8 @@ def test_run_flowsom_end_to_end(tmp_path: Path) -> None:
     adata.layers["zscore"] = z
 
     sig = sig_mod.load_signature(_write_signature(tmp_path))
-    cfg = PhenotypeFlowsomCfg(grid_size=(6, 6), n_metaclusters=6, som_iterations=20, train_subsample=None)
-    res = fe.run_flowsom(adata, sig, cfg, batch_key="ROI")
+    cfg = PhenotypeLeidenCfg(n_neighbors=15, resolution=1.0)
+    res = le.run_leiden(adata, sig, cfg, batch_key="ROI")
 
     assert res.cluster is not None
     assert len(res.labels) == adata.n_obs
@@ -257,13 +258,13 @@ def test_run_flowsom_end_to_end(tmp_path: Path) -> None:
     assert (b_block == "B cell").mean() > 0.5
 
 
-def test_label_metaclusters_tau_yields_unknown(tmp_path: Path) -> None:
-    from macsima_pipeline.phenotype.engines.flowsom import _label_metaclusters
+def test_label_clusters_tau_yields_unknown(tmp_path: Path) -> None:
+    from macsima_pipeline.phenotype.engines._labeling import label_clusters
 
     sig = sig_mod.load_signature(_write_signature(tmp_path))
     z = np.zeros((10, len(MARKERS)))  # no enrichment
     cluster_ids = np.zeros(10, dtype=int)
-    labels, _, label_map, _ = _label_metaclusters(
+    labels, _, label_map, _ = label_clusters(
         z, cluster_ids, sig.score_matrix(MARKERS), sig.cell_type_names(), tau=0.1
     )
     assert label_map[0] == "Unknown"
@@ -305,7 +306,7 @@ def test_write_atomic_and_phenotype_done(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  Astir adapter (fake lib — no torch training)                               #
+#  scyan adapter (fake scyan module — no torch training)                      #
 # --------------------------------------------------------------------------- #
 
 _ADAPTER_SIG = """\
@@ -317,44 +318,53 @@ cell_types:
 """
 
 
-def test_astir_adapter_thresholds_low_confidence(tmp_path: Path, monkeypatch) -> None:
-    from macsima_pipeline.config import PhenotypeAstirCfg
-    from macsima_pipeline.phenotype.engines import astir as astir_engine
+def test_scyan_adapter_thresholds_low_confidence(tmp_path: Path, monkeypatch) -> None:
+    import sys
+    import types
+
+    import pandas as pd
+
+    from macsima_pipeline.config import PhenotypeScyanCfg
+    from macsima_pipeline.phenotype.engines import scyan as scyan_engine
 
     (tmp_path / "s.yaml").write_text(_ADAPTER_SIG)
     sig = sig_mod.load_signature(tmp_path / "s.yaml")
 
     a = _make_adata(n=6)
-    a.layers["counts"] = a.X.copy()  # adapter reads raw counts layer
+    a.layers["zscore"] = a.X.copy()  # adapter reads the scaled layer
 
-    classes = [*sig.cell_type_names(), "Other"]  # T cell, B cell, Macrophage, Other
+    names = sig.cell_type_names()  # T cell, B cell, Macrophage
 
-    def fake_fit(expression, marker_names, signature, **kw):
-        n = expression.shape[0]
-        proba = np.full((n, len(classes)), 0.02, dtype=np.float32)
-        proba[: n // 2, 0] = 0.9  # confident T cell
-        proba[n // 2 :, :] = 1.0 / len(classes)  # flat -> below threshold
-        proba /= proba.sum(axis=1, keepdims=True)
+    class _FakeScyan:
+        def __init__(self, adata, table, **kw):
+            self._n = adata.n_obs
 
-        class _Fake:
-            classes_ = classes
-            losses = [1.0, 0.5]
-            converged = True
+        def fit(self, **kw):
+            return self
 
-            def predict_proba(self_inner):
-                return proba
+        def predict(self, key_added="scyan_pop", **kw):
+            n = self._n
+            vals = [names[0]] * (n // 2) + [np.nan] * (n - n // 2)
+            return pd.Series(vals, dtype=object)
 
-        return _Fake()
+        def predict_proba(self):
+            n = self._n
+            proba = np.full((n, len(names)), 0.02, dtype=np.float64)
+            proba[: n // 2, 0] = 0.9  # confident T cell
+            proba[n // 2 :, :] = 1.0 / len(names)  # flat -> below threshold
+            proba /= proba.sum(axis=1, keepdims=True)
+            return pd.DataFrame(proba, columns=names)
 
-    monkeypatch.setattr("macsima_pipeline.lib.astir.fit", fake_fit)
+    fake_mod = types.ModuleType("scyan")
+    fake_mod.Scyan = _FakeScyan
+    monkeypatch.setitem(sys.modules, "scyan", fake_mod)
 
-    cfg = PhenotypeAstirCfg(min_confidence=0.7)
-    res = astir_engine.run_astir(a, sig, cfg, batch_key="ROI")
-    assert list(res.probabilities.columns) == classes
-    assert (res.labels.iloc[: 3] == "T cell").all()
+    cfg = PhenotypeScyanCfg(min_confidence=0.7)
+    res = scyan_engine.run_scyan(a, sig, cfg, batch_key="ROI")
+    assert list(res.probabilities.columns) == names
+    assert (res.labels.iloc[:3] == "T cell").all()
     assert (res.labels.iloc[3:] == "Unknown").all()
-    assert res.uns["engine"] == "astir"
-    assert res.uns["converged"] is True
+    assert res.uns["engine"] == "scyan"
 
 
 # --------------------------------------------------------------------------- #
@@ -503,12 +513,12 @@ def test_run_inproc_write_back_contract(tmp_path: Path, monkeypatch) -> None:
     raw.write_h5ad(cfg.h5ad_path(False))
 
     monkeypatch.setattr(
-        workers.astir_engine, "run_astir",
-        lambda adata, sig, c, batch_key=None: _fake_engine_result(adata, sig, "astir", False),
+        workers.scyan_engine, "run_scyan",
+        lambda adata, sig, c, batch_key=None: _fake_engine_result(adata, sig, "scyan", False),
     )
     monkeypatch.setattr(
-        workers.flowsom_engine, "run_flowsom",
-        lambda adata, sig, c, batch_key=None: _fake_engine_result(adata, sig, "flowsom", True),
+        workers.leiden_engine, "run_leiden",
+        lambda adata, sig, c, batch_key=None: _fake_engine_result(adata, sig, "leiden", True),
     )
 
     workers.run_inproc(cfg)
@@ -520,7 +530,7 @@ def test_run_inproc_write_back_contract(tmp_path: Path, monkeypatch) -> None:
     assert "counts" in out.layers and "zscore" in out.layers
     assert "spatial" in out.obsm and out.obsm["spatial"].shape == (out.n_obs, 2)
     for col in ("cell_type", "cell_type_coarse", "cell_type_confidence",
-                "astir_celltype", "flowsom", "flowsom_celltype", "pheno_agree"):
+                "scyan_celltype", "leiden", "leiden_celltype", "pheno_agree"):
         assert col in out.obs.columns, col
     assert "phenotype" in out.uns
     assert "composition" in out.uns["phenotype"]
@@ -537,13 +547,13 @@ def test_run_inproc_skips_without_signature(tmp_path: Path, monkeypatch) -> None
     cfg = _build_cfg(tmp_path)
     cfg.phenotype.signature_matrix = None  # -> graceful skip
 
-    called = {"astir": False}
+    called = {"scyan": False}
 
     def _boom(*a, **k):
-        called["astir"] = True
+        called["scyan"] = True
         raise AssertionError("engine must not run when signature is unset")
 
-    monkeypatch.setattr(workers.astir_engine, "run_astir", _boom)
+    monkeypatch.setattr(workers.scyan_engine, "run_scyan", _boom)
     workers.run_inproc(cfg)  # returns cleanly
-    assert called["astir"] is False
+    assert called["scyan"] is False
     assert not cfg.phenotype_h5ad_path(False).exists()

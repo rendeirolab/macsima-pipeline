@@ -44,9 +44,9 @@ _INTERNAL_OBS_COLUMNS = {
     "cell_type",
     "cell_type_coarse",
     "cell_type_confidence",
-    "astir_celltype",
-    "flowsom",
-    "flowsom_celltype",
+    "scyan_celltype",
+    "leiden",
+    "leiden_celltype",
     "pheno_agree",
 }
 

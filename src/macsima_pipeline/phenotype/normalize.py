@@ -2,15 +2,15 @@
 
 Pure numpy, deterministic, sparse-safe. Operates in place on `adata.X`:
 
-    stash_raw(adata)      # layers['counts'] <- raw (Astir reads this untouched)
+    stash_raw(adata)      # layers['counts'] <- raw (kept for provenance)
     normalize(adata, cfg) # X <- winsorize -> transform -> z-score
     apply_batch(adata, cfg)  # X <- batch-corrected (per-ROI z-score by default)
 
-The caller then copies the final X into `layers[normalized_layer]` (FlowSOM input).
+The caller then copies the final X into `layers[normalized_layer]`; both engines
+(scyan, Leiden) read that normalized layer.
 
 Design note: normalization choice dominates cell-typing accuracy for imaging data,
-and per-marker z-score is the most robust transform (Hickey et al. 2021). Astir does
-NOT use this output — it re-derives its own transform from the raw counts layer.
+and per-marker z-score is the most robust transform (Hickey et al. 2021).
 """
 
 from __future__ import annotations

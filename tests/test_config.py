@@ -66,16 +66,16 @@ experiment:
     # phenotype (Stage 4) defaults apply even when the config omits the block
     assert cfg.phenotype.enabled is True
     assert cfg.phenotype.signature_matrix is None
-    assert cfg.phenotype.engines == ["astir", "flowsom"]
-    assert cfg.phenotype.primary_engine == "astir"
+    assert cfg.phenotype.engines == ["scyan", "leiden"]
+    assert cfg.phenotype.primary_engine == "scyan"
     assert cfg.phenotype.normalize.transform == "arcsinh"
     assert cfg.phenotype.normalize.store_raw_layer == "counts"
     assert cfg.phenotype.normalize.normalized_layer == "zscore"
     assert cfg.phenotype.batch.method == "zscore_per_roi"
-    assert cfg.phenotype.astir.use_layer == "counts"
-    assert cfg.phenotype.flowsom.use_layer == "zscore"
-    assert cfg.phenotype.astir.winsorize == (0.0, 99.9)
-    assert cfg.phenotype.flowsom.grid_size == (10, 10)
+    assert cfg.phenotype.scyan.use_layer == "zscore"
+    assert cfg.phenotype.leiden.use_layer == "zscore"
+    assert cfg.phenotype.scyan.prior_std == 0.25
+    assert cfg.phenotype.leiden.n_neighbors == 15
     # phenotype SLURM stage falls back to the GPU preprocess stage when unset
     assert cfg.slurm.stage("phenotype").gres == "gpu:1"
     assert cfg.slurm.stage("phenotype").partition == "gpu"

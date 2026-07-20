@@ -102,8 +102,8 @@ viz:
 phenotype:
   enabled: true
   signature_matrix: null        # path to signature YAML; null -> stage skips (chain still proceeds)
-  engines: ["astir", "flowsom"]
-  primary_engine: "astir"       # which engine populates obs['cell_type']
+  engines: ["scyan", "leiden"]
+  primary_engine: "scyan"       # which engine populates obs['cell_type']
   coarse_label_key: "cell_type_coarse"
   normalize:                    # per-marker: winsorize -> transform -> z-score
     clip_percentile: 99.9       # upper clip; null disables
@@ -113,37 +113,37 @@ phenotype:
     cofactors: {}               # {marker: cofactor} overrides
     percentile_norm_p: 99.0     # used when transform == percentile
     zscore: true
-    store_raw_layer: "counts"   # layer holding raw intensities (Astir reads this)
-    normalized_layer: "zscore"  # layer holding normalized matrix (FlowSOM reads this)
+    store_raw_layer: "counts"   # layer holding raw intensities (kept for provenance)
+    normalized_layer: "zscore"  # normalized matrix (scyan + leiden read this)
   batch:
     method: "zscore_per_roi"    # none|zscore_per_roi|quantile_reference|combat
     batch_key: "ROI"
     reference: null             # reference batch for quantile_reference; null -> cross-batch median
     min_cells_per_batch: 50     # below this, fall back to global stats (avoids degenerate per-ROI z)
-  astir:
+  scyan:
     enabled: true
-    cofactor: 5.0               # Astir does its OWN arcsinh(raw/cofactor); reads raw counts layer
-    winsorize: [0.0, 99.9]
-    max_epochs: 50
-    n_init: 5
-    learning_rate: 0.001
-    batch_size: 16384
-    random_seed: 0
+    use_layer: "zscore"         # arcsinh + z-scored (scaled input for the flow)
+    max_epochs: 100
+    lr: 0.001
+    prior_std: 0.25
+    hidden_size: 16
+    n_hidden_layers: 6
+    n_layers: 7
+    temperature: 0.5
+    max_samples: 200000         # cap training cells (null -> all)
     device: "auto"              # auto|cpu|cuda
-    precision: "fp32"           # fp32|bf16 (bf16 only for the recog net; Gaussian stays fp32)
-    min_confidence: 0.7         # below max-prob -> "Unknown"
-    use_layer: "counts"         # RAW intensities
-    include_batch_covariate: true  # per-ROI baseline via design matrix
-  flowsom:
-    enabled: true
-    grid_size: [10, 10]
-    n_metaclusters: 30          # ~2-3x expected cell types (over-partition, then label)
-    som_iterations: 100
-    train_subsample: 200000     # train SOM on a cap; predict all cells (null -> all)
-    scoring: "signature_zscore" # signature_zscore|signature_cosine
-    tau: 0.0                    # metacluster score below this -> "Unknown"
+    log_prob_th: -50.0          # below this max log-prob -> unassigned ("Unknown")
+    min_confidence: 0.0         # extra soft-prob gate (0 -> disabled)
+    include_batch_covariate: false  # pipeline already batch-corrects; scyan batch off by default
     random_seed: 0
+  leiden:
+    enabled: true
     use_layer: "zscore"         # arcsinh + z-scored
+    n_neighbors: 15
+    resolution: 1.0
+    n_iterations: 2             # igraph Leiden iterations
+    tau: 0.0                    # cluster score below this -> "Unknown"
+    random_seed: 0
   spatial_qc:
     enabled: true
     coord_type: "generic"

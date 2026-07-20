@@ -1,3 +1,3 @@
-"""Phenotyping engines: Astir (probabilistic) and FlowSOM (metaclustering)."""
+"""Phenotyping engines: scyan (probabilistic) and Leiden (graph clustering)."""
 
 from __future__ import annotations

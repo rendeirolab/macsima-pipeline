@@ -396,8 +396,8 @@ def test_plot_cell_map_qc_summary_phenotype_page(tmp_path: Path) -> None:
     adata = _synthetic_adata()
     adata.obs["cell_type"] = pd.Categorical(["T cell", "B cell", "T cell", "Macrophage"])
     adata.uns["phenotype"] = {
-        "engines": ["astir", "flowsom"],
-        "primary_engine": "astir",
+        "engines": ["scyan", "leiden"],
+        "primary_engine": "scyan",
         "agreement": {"accuracy": 0.9, "cohen_kappa": 0.8, "adjusted_rand": 0.75},
         "spatial_qc": {
             "labels": ["T cell", "B cell", "Macrophage"],

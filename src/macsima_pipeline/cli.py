@@ -173,7 +173,7 @@ def phenotype(
     inproc: bool = False,
     only: list[str] | None = None,
 ) -> int | None:
-    """Stage 4: normalize, phenotype (Astir + FlowSOM), spatial QC; write back AnnData.
+    """Stage 4: normalize, phenotype (scyan + Leiden), spatial QC; write back AnnData.
 
     With --inproc, runs in the current process. Otherwise plans or submits a single
     SLURM job. Skips gracefully (exit 0) when phenotype is disabled or no signature
@@ -186,7 +186,7 @@ def phenotype(
 def _phenotype_one(
     config: Path, submit: bool, dependency: int | None, inproc: bool
 ) -> int | None:
-    banner("Stage 4 — phenotype (normalize + Astir/FlowSOM + spatial QC)", subtitle=str(config))
+    banner("Stage 4 — phenotype (normalize + scyan/Leiden + spatial QC)", subtitle=str(config))
     cfg = _load(config)
     if inproc:
         from .phenotype import workers
@@ -482,7 +482,7 @@ def gen_signature(
     bg: bool = False,
     force: bool = False,
 ) -> None:
-    """Scaffold the Astir/FlowSOM signature (marker->cell-type table) from the panel.
+    """Scaffold the scyan/Leiden signature (marker->cell-type table) from the panel.
 
     Post-staging: reads the marker panel and writes a signature YAML template listing
     all panel markers + example cell types to curate. Set phenotype.signature_matrix at
@@ -515,7 +515,7 @@ def phenotype_joint(
     """Stage 4 (joint): phenotype ALL experiments in a batch together (one model).
 
     Concatenates every experiment's cell-expression h5ad (inner-join on shared markers),
-    fits Astir/FlowSOM ONCE, writes a combined phenotyped h5ad, and splits the joint
+    fits scyan/Leiden ONCE, writes a combined phenotyped h5ad, and splits the joint
     labels back into each experiment's phenotyped h5ad (so per-experiment viz uses them).
     Run after preprocess. --inproc runs locally; otherwise submits one SLURM job.
     `--batch-key` (default `sample` = experiment|ROI) sets the batch-correction unit.

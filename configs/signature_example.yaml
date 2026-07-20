@@ -9,7 +9,7 @@
 # Marker names must match adata.var_names; markers absent from the panel are dropped with
 # a warning (a type that loses ALL its positives is an error).
 #
-# Astir uses `positive` only; FlowSOM scoring uses `positive` and `negative`.
+# scyan turns these into a knowledge table; Leiden scoring uses `positive` and `negative`.
 
 version: 1
 
