@@ -1,0 +1,15 @@
+Independent (clean-room) implementation of the Astir cell-type model.
+
+This code implements the probabilistic cell-type assignment model described in:
+
+  Geuenich, M.J., Hou, J., Lee, S., et al.
+  "Automated assignment of cell identity from single-cell multiplexed imaging
+   and proteomic data." Cell Systems 12, 1173-1186 (2021).
+  https://doi.org/10.1016/j.cels.2021.08.012
+
+It was written from the published model equations. It is NOT derived from, and does
+not copy code from, the reference `astir` package (camlab-bioml/astir), which is
+licensed GPL-2.0. This implementation is therefore an original work distributed
+under this project's MIT license.
+
+If you use this engine, please cite the paper above.

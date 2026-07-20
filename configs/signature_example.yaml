@@ -1,0 +1,28 @@
+# Example signature matrix for the phenotype stage.
+#
+# Copy this to your experiment dir, edit for YOUR antibody panel + tissue, and point
+# `phenotype.signature_matrix` at it (path is relative to paths.work_dir).
+#
+# Each cell type lists the markers expected POSITIVE (required) and optionally NEGATIVE.
+# `parent` builds the coarse label (leaf -> root ancestor); a parent that is not itself a
+# defined cell type (e.g. "Immune") is a pure lineage label and becomes the coarse class.
+# Marker names must match adata.var_names; markers absent from the panel are dropped with
+# a warning (a type that loses ALL its positives is an error).
+#
+# Astir uses `positive` only; FlowSOM scoring uses `positive` and `negative`.
+
+version: 1
+
+cell_types:
+  T cell:        {positive: [CD3, CD45],  negative: [CD19, CD68],       parent: Immune}
+  CD4 T cell:    {positive: [CD3, CD4],   negative: [CD8],              parent: T cell}
+  CD8 T cell:    {positive: [CD3, CD8],   negative: [CD4],              parent: T cell}
+  B cell:        {positive: [CD19, CD20], negative: [CD3, CD68],        parent: Immune}
+  NK cell:       {positive: [CD56],       negative: [CD3, CD19],        parent: Immune}
+  Macrophage:    {positive: [CD68, CD163],negative: [CD3, CD19],        parent: Myeloid}
+  Dendritic:     {positive: [CD11c, HLADR], negative: [CD3],            parent: Myeloid}
+  Endothelial:   {positive: [CD31],       negative: [CD45],             parent: Stroma}
+  Epithelial:    {positive: [PanCK, EpCAM], negative: [CD45],           parent: Epithelium}
+
+  # positive-only shorthand is also accepted:
+  # Proliferating: [Ki67]

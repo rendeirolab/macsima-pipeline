@@ -1,0 +1,23 @@
+# Batch config: metpredict dataset assembled 2026-07-17 (Expr34 + Expr37 + Expr38).
+# Three experiments processed together; shared panel/segmentation/SLURM from default.yaml.
+#
+#   macsima-pipeline all --config experiments/metpredict-dataset-2026-07-17/config.yaml --submit
+#   macsima-pipeline all --config experiments/metpredict-dataset-2026-07-17/config.yaml --only expr38 --submit
+
+extends: "../../configs/default.yaml"
+
+mcmicro:
+  background_subtraction: "auto"      # shared by every experiment
+
+experiments:
+  - name: expr34
+    raw_root: "/research/lab_rendeiro/projects/metpredict/data/MACSima/Expr34_260528_091615/Expr34_2026-05-21_12-19-04/RawData/R1/B1"
+    roi_metadata_csv: "experiments/metpredict-dataset-2026-07-17/expr34_roi_metadata.csv"
+
+  - name: expr37
+    raw_root: "/research/lab_rendeiro/projects/metpredict/data/MACSima/Expr37_260629_011343/Expr37_2026-06-23_13-08-11/RawData/R1/B1"
+    roi_metadata_csv: "experiments/metpredict-dataset-2026-07-17/expr37_roi_metadata.csv"
+
+  - name: expr38
+    raw_root: "/research/lab_rendeiro/projects/metpredict/data/MACSima/Expr38_260709_231126/Expr38_2026-07-02_09-12-26/RawData/R1/B1"
+    roi_metadata_csv: "experiments/metpredict-dataset-2026-07-17/expr38_roi_metadata.csv"

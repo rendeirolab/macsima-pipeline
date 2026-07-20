@@ -1,0 +1,17 @@
+# expr34 — worked example. Inherits from configs/default.yaml.
+extends: "../../../configs/default.yaml"
+
+experiment:
+  name: "lab_stary_expr35"
+  raw_root: "/nobackup/lab_stary/MACSIMA/Expr_35 1_260608_201125/Expr_351_2026-06-02_11-53-46/RawData/R1/A1"
+  roi_glob: "ROI*"
+  roi_exclude: ["ROI0"]
+  roi_metadata_csv: "experiments/lab_stary/expr35/roi_metadata.csv"
+
+mcmicro:
+  background_subtraction: auto
+
+viz:
+  combinations: []
+    # - {name: "comb_immune",   markers: ["CD14", "CD11b", "DAPI"]}
+    # - {name: "comb_vascular", markers: ["Endomucin", "Cytokeratin_LMW", "VWF"]}

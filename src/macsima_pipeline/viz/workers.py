@@ -1,4 +1,4 @@
-"""joblib-parallel viz driver: marker grids + ROI grids + RGB combinations.
+"""joblib-parallel viz driver: marker grids, ROI grids, RGB combinations, and cell-map QC.
 
 Reads channel_info from the first mcmicro sample (same convention as
 `preprocess.py`), enumerates ROI files, and fans out figure rendering across
@@ -15,6 +15,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from ..config import Config
+from . import cell_maps
+from . import channel_qc
 from . import render
 from .render import RoiImage
 
@@ -83,6 +85,9 @@ def _run_variant(cfg: Config, bg: bool) -> None:
 
     log.info("resolving %d ROI(s) (pyramid level pick)...", len(images))
     rois: list[RoiImage] = [render.resolve_roi(p, cfg) for p in images]
+
+    # ---- Pass 0: quantitative per-ROI/channel staining QC -----------------
+    channel_qc.run_variant_qc(cfg, rois, channel_info, first_sample, bg)
 
     figdir = cfg.figures_dir() / "rois"
     figdir.mkdir(parents=True, exist_ok=True)
@@ -156,6 +161,25 @@ def _run_variant(cfg: Config, bg: bool) -> None:
                 continue
             render.plot_rgb_combination(rois, ixs, comb.markers, comb.name, cfg, out)
 
+    # ---- Pass D: multi-page cell-location QC summary ----------------------
+    if cfg.viz.cell_maps:
+        # Prefer the phenotyped h5ad (colors maps by cell type + adds a coherence
+        # page); fall back to the raw preprocess output for backward compatibility.
+        phenotyped = cfg.phenotype_h5ad_path(bg)
+        h5ad_path = phenotyped if phenotyped.is_file() else cfg.h5ad_path(bg)
+        qc_dir = cfg.figures_dir() / "qc"
+        out = qc_dir / f"{cfg.experiment.name}_mcmicro_cell_maps_summary{suffix}.pdf"
+        if render.is_valid_output(out, "pdf"):
+            log.info("skipping completed output: %s", out)
+        elif not h5ad_path.is_file():
+            log.warning("skipping cell-map QC summary; AnnData missing: %s", h5ad_path)
+        else:
+            import anndata as ad
+
+            log.info("rendering cell-map QC summary from %s", h5ad_path)
+            adata = ad.read_h5ad(h5ad_path)
+            cell_maps.plot_cell_map_qc_summary(adata, cfg, out, bg=bg, h5ad_path=h5ad_path)
+
     _save_percentile_cache(cfg, cache, bg)
     log.info("viz variant done: %s", label)
 
@@ -179,4 +203,5 @@ def run_inproc(cfg: Config) -> None:
             log.warning("skipping viz variant bg=%s: %s", bg, e)
     if ran == 0:
         raise FileNotFoundError("No viz variants produced output; check mcmicro outputs")
+    channel_qc.write_bg_comparison(cfg)
     log.info("viz done (%d variant(s))", ran)

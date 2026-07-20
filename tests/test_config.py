@@ -52,9 +52,36 @@ experiment:
     assert cfg.suffix == "_no_bs"
     assert str(cfg.zarr_path()).endswith("expt99_mcmicro_no_bs.zarr")
     assert str(cfg.h5ad_path()).endswith("expt99_cell_expression_mcmicro_no_bs.h5ad")
+    assert str(cfg.preprocess_parts_path()).endswith("artifacts/expt99/preprocess_parts_no_bs")
     assert str(cfg.figures_dir()).endswith("figures/expt99")
     assert cfg.jobs_csv("staging").name == "staging_expt99.csv"
     assert cfg.sbatch_path("mcmicro").name == "mcmicro_expt99.sbatch"
+    assert cfg.preprocess.parallel.max_workers == 4
+    assert cfg.slurm.stage("preprocess_merge").partition == "shortq"
+    assert cfg.slurm.stage("preprocess_merge").gres is None
+    assert cfg.viz.cell_maps is True
+    assert cfg.viz.cell_map_marker_top_n == 20
+    assert cfg.viz.channel_qc.enabled is True
+    assert cfg.viz.channel_qc.tile_grid == (8, 8)
+    assert cfg.viz.channel_qc.workers is None
+    assert cfg.viz.channel_qc.report_top_n == 30
+    # phenotype (Stage 4) defaults apply even when the config omits the block
+    assert cfg.phenotype.enabled is True
+    assert cfg.phenotype.signature_matrix is None
+    assert cfg.phenotype.engines == ["astir", "flowsom"]
+    assert cfg.phenotype.primary_engine == "astir"
+    assert cfg.phenotype.normalize.transform == "arcsinh"
+    assert cfg.phenotype.normalize.store_raw_layer == "counts"
+    assert cfg.phenotype.normalize.normalized_layer == "zscore"
+    assert cfg.phenotype.batch.method == "zscore_per_roi"
+    assert cfg.phenotype.astir.use_layer == "counts"
+    assert cfg.phenotype.flowsom.use_layer == "zscore"
+    assert cfg.phenotype.astir.winsorize == (0.0, 99.9)
+    assert cfg.phenotype.flowsom.grid_size == (10, 10)
+    # phenotype SLURM stage falls back to the GPU preprocess stage when unset
+    assert cfg.slurm.stage("phenotype").gres == "gpu:1"
+    assert cfg.slurm.stage("phenotype").partition == "gpu"
+    assert str(cfg.phenotype_h5ad_path()).endswith("expt99_phenotyped_mcmicro_no_bs.h5ad")
 
 
 def test_suffix_with_background_subtraction(tmp_path: Path) -> None:

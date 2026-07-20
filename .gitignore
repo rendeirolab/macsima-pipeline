@@ -21,6 +21,9 @@ env/
 coverage.xml
 htmlcov/
 
+# graphify knowledge-graph output/cache
+graphify-out/
+
 # Local environment and editor state
 .env
 .env.*

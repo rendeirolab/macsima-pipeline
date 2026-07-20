@@ -1,0 +1,39 @@
+# Example BATCH config: process multiple experiments in one submit.
+#
+# A batch config carries a top-level `experiments:` list instead of a single
+# `experiment:` mapping. Every other section is shared across all experiments —
+# here they come from configs/default.yaml via `extends`, plus the shared
+# overrides below. Each entry differs only in its per-experiment fields.
+#
+# Submit the whole batch (one independent SLURM chain per experiment):
+#   macsima-pipeline all --config configs/batch_example.yaml --submit
+#
+# Data arrives over weeks — append an entry, then submit only the new one:
+#   macsima-pipeline all --config configs/batch_example.yaml --only expr40 --submit
+#
+# Scaffold the per-experiment inputs from this same config:
+#   macsima-pipeline gen-roi-metadata --config configs/batch_example.yaml --columns Sample
+#   macsima-pipeline gen-markers      --config configs/batch_example.yaml   # after staging
+
+extends: "default.yaml"
+
+# Shared overrides beyond default.yaml (apply to EVERY experiment):
+mcmicro:
+  background_subtraction: "auto"
+
+experiments:
+  # Each entry is validated as an experiment; it inherits the shared
+  # `experiment:` defaults from default.yaml (roi_glob, roi_exclude: ["ROI0"], ...)
+  # and overrides only what differs.
+  - name: expr37
+    raw_root: "/research/lab_rendeiro/projects/metpredict/data/MACSima/Expr37_260629_011343/Expr37_2026-06-23_13-08-11/RawData/R1/B1"
+    roi_metadata_csv: "configs/batch_example/expr37_roi_metadata.csv"
+
+  - name: lab_stary_expr35
+    raw_root: "/nobackup/lab_stary/MACSIMA/Expr_35 1_260608_201125/Expr_351_2026-06-02_11-53-46/RawData/R1/A1"
+    roi_exclude: ["ROI0", "ROI7"]
+    roi_metadata_csv: "configs/batch_example/expr35_roi_metadata.csv"
+
+  # Appended weeks later — submit with `--only expr40`:
+  # - name: expr40
+  #   raw_root: "/research/.../Expr40_.../RawData/R1/C2"

@@ -1,0 +1,14 @@
+ROI,Model,Mouse ID,Tissue,Metastatic Potential
+ROI1,J53353,640,Tumor,High
+ROI2,HCI009,700,Tumor,Moderate
+ROI3,HCI009,700,Lung,Moderate
+ROI4,HCI009,700,Lung,Moderate
+ROI5,HCI011,690,Lung,Moderate
+ROI6,HCI011,690,Lung,Moderate
+ROI7,J53353,640,Lung,High
+ROI8,J53353,640,Lung,High
+ROI9,J53353,640,Lung,High
+ROI10,HCI011,690,Tumor,Moderate
+ROI11,HCI011,690,Tumor,Moderate
+ROI12,HCI011,690,Tumor,Moderate
+ROI13,HCI009,700,Tumor,Moderate

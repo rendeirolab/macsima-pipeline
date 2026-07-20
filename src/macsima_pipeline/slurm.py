@@ -42,7 +42,7 @@ def render_sbatch(
     slurm_stage = slurm_stage or stage
     output_stage = output_stage or stage
 
-    slurm: SlurmStage = getattr(cfg.slurm, slurm_stage)
+    slurm: SlurmStage = cfg.slurm.stage(slurm_stage)
     env = _env()
     tmpl = env.get_template(f"{template_stage}.sbatch.j2")
     ctx = {
@@ -72,15 +72,19 @@ def submit(
     sbatch_path: Path,
     *,
     array_size: int | None = None,
+    array_limit: int | None = None,
     dependency: str | None = None,
     wait: bool = False,
 ) -> int:
-    """Run `sbatch [--array=1-N] [--dependency=afterok:JOBID] PATH` and return job id."""
+    """Run `sbatch [--array=1-N[%M]] [--dependency=afterok:JOBID] PATH` and return job id."""
     if shutil.which("sbatch") is None:
         raise RuntimeError("sbatch not found on PATH; cannot submit")
     cmd = ["sbatch"]
     if array_size:
-        cmd += [f"--array=1-{array_size}"]
+        array = f"1-{array_size}"
+        if array_limit:
+            array = f"{array}%{array_limit}"
+        cmd += [f"--array={array}"]
     if dependency:
         cmd += [f"--dependency=afterok:{dependency}"]
     if wait:

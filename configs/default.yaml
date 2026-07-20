@@ -15,6 +15,8 @@ paths:
   mcmicro_out: "mcmicro_output"
   zarr_out: "artifacts/{experiment_name}/{experiment_name}_mcmicro{suffix}.zarr"
   h5ad_out: "artifacts/{experiment_name}/{experiment_name}_cell_expression_mcmicro{suffix}.h5ad"
+  phenotype_h5ad_out: "artifacts/{experiment_name}/{experiment_name}_phenotyped_mcmicro{suffix}.h5ad"
+  preprocess_parts_dir: "artifacts/{experiment_name}/preprocess_parts{suffix}"
   figures_dir: "figures/{experiment_name}"
   jobs_dir: "jobs"
   logs_dir: "logs"
@@ -46,7 +48,9 @@ preprocess:
     min_area: 15
     gpu: true
   patches:
-    patch_width: null
+    patch_width: 2048
+  parallel:
+    max_workers: 4              # SLURM array throttle for GPU preprocess workers
   scale_factors: [2, 4]
 
 viz:
@@ -65,11 +69,80 @@ viz:
   rasterized: true              # rasterize imshow when saving PDF
   pdf_compression: 9
   combinations: []              # list of {name, markers: [m1, m2, m3]} for RGB plots
+  cell_maps: true               # multi-page cell XY + expression QC summary PDF
+  cell_map_marker_top_n: 20     # max markers shown in per-ROI expression QC bars
+  cell_map_point_size: 1.0      # scatter point size for cell XY maps
+  cell_map_marker_columns: 3    # columns used for the full marker list on the summary page
+  channel_qc:
+    enabled: true               # quantitative per-ROI/channel staining QC tables + PDF summaries
+    sigma: 3.0                  # sensitivity threshold: background + sigma * robust noise
+    outlier_z: 3.5              # robust marker-relative z-score threshold for warning flags
+    min_snr: 3.0
+    min_positive_fraction: 0.001
+    max_saturated_fraction: 0.001
+    tile_grid: [8, 8]           # coarse spatial grid for uneven staining/illumination checks
+    workers: null               # null = reuse viz.parallel.workers
+    report_top_n: 30
   parallel:
     workers: 8
     roi_workers: 1              # ROI grids are memory-heavy; render sequentially by default
     backend: "loky"
   cache_percentiles: true       # persist (roi, marker) -> (p1,p99) to parquet for resume
+
+phenotype:
+  enabled: true
+  signature_matrix: null        # path to signature YAML; null -> stage skips (chain still proceeds)
+  engines: ["astir", "flowsom"]
+  primary_engine: "astir"       # which engine populates obs['cell_type']
+  coarse_label_key: "cell_type_coarse"
+  normalize:                    # per-marker: winsorize -> transform -> z-score
+    clip_percentile: 99.9       # upper clip; null disables
+    clip_lower_percentile: null
+    transform: "arcsinh"        # arcsinh|percentile|none
+    cofactor: 5.0               # arcsinh cofactor (tune to MACSima fluorescence scale)
+    cofactors: {}               # {marker: cofactor} overrides
+    percentile_norm_p: 99.0     # used when transform == percentile
+    zscore: true
+    store_raw_layer: "counts"   # layer holding raw intensities (Astir reads this)
+    normalized_layer: "zscore"  # layer holding normalized matrix (FlowSOM reads this)
+  batch:
+    method: "zscore_per_roi"    # none|zscore_per_roi|quantile_reference|combat
+    batch_key: "ROI"
+    reference: null             # reference batch for quantile_reference; null -> cross-batch median
+    min_cells_per_batch: 50     # below this, fall back to global stats (avoids degenerate per-ROI z)
+  astir:
+    enabled: true
+    cofactor: 5.0               # Astir does its OWN arcsinh(raw/cofactor); reads raw counts layer
+    winsorize: [0.0, 99.9]
+    max_epochs: 50
+    n_init: 5
+    learning_rate: 0.001
+    batch_size: 16384
+    random_seed: 0
+    device: "auto"              # auto|cpu|cuda
+    precision: "fp32"           # fp32|bf16 (bf16 only for the recog net; Gaussian stays fp32)
+    min_confidence: 0.7         # below max-prob -> "Unknown"
+    use_layer: "counts"         # RAW intensities
+    include_batch_covariate: true  # per-ROI baseline via design matrix
+  flowsom:
+    enabled: true
+    grid_size: [10, 10]
+    n_metaclusters: 30          # ~2-3x expected cell types (over-partition, then label)
+    som_iterations: 100
+    train_subsample: 200000     # train SOM on a cap; predict all cells (null -> all)
+    scoring: "signature_zscore" # signature_zscore|signature_cosine
+    tau: 0.0                    # metacluster score below this -> "Unknown"
+    random_seed: 0
+    use_layer: "zscore"         # arcsinh + z-scored
+  spatial_qc:
+    enabled: true
+    coord_type: "generic"
+    n_neighs: 6
+    nhood_enrichment: true
+    homophily: true
+    n_perms: 1000
+    min_cells_per_roi: 100      # skip unstable per-ROI enrichment below this
+    random_seed: 0
 
 slurm:
   account: null                 # optional --account
@@ -86,6 +159,20 @@ slurm:
     mem: "64G"
     time: "12:00:00"
   preprocess:
+    partition: "gpu"
+    qos: "gpu"
+    gres: "gpu:1"
+    cpus: 16
+    mem: "100G"
+    time: "6:00:00"
+    comment: "skip_dcgm"
+  preprocess_merge:
+    partition: "shortq"
+    qos: "shortq"
+    cpus: 8
+    mem: "100G"
+    time: "4:00:00"
+  phenotype:
     partition: "gpu"
     qos: "gpu"
     gres: "gpu:1"

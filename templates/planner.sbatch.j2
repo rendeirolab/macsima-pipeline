@@ -1,0 +1,19 @@
+#!/bin/bash
+# Lightweight continuation job: submits dependent SLURM jobs, then exits.
+#SBATCH --partition={{ slurm.partition }}
+#SBATCH --qos={{ slurm.qos }}
+#SBATCH --job-name={{ stage }}_{{ experiment }}
+#SBATCH --output={{ log_path }}
+#SBATCH --cpus-per-task={{ slurm.cpus }}
+#SBATCH --mem={{ slurm.mem }}
+#SBATCH --time={{ slurm.time }}
+{% if slurm.gres %}#SBATCH --gres={{ slurm.gres }}
+{% endif %}
+{% if slurm.comment %}#SBATCH --comment={{ slurm.comment }}
+{% endif %}
+{% if account %}#SBATCH --account={{ account }}
+{% endif %}
+
+set -euo pipefail
+
+{{ body_cmd }}

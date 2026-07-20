@@ -24,7 +24,13 @@ dependencies = [
     "squidpy>=1.6.6",
     "tifffile>=2024.0",
     "anndata>=0.10",
-    "pandas>=2.0",
+    # phenotype stage: scanpy (ComBat + utilities) and scikit-learn (metrics) are used
+    # directly; FlowSOM engine + its metaclustering. pandas pinned <3 because
+    # FlowSOM 0.2.x trips over pandas copy-on-write (read-only np.asarray).
+    "scanpy>=1.10",
+    "scikit-learn>=1.4",
+    "flowsom>=0.2.1",
+    "pandas>=2.0,<3",
     "numpy>=1.26",
     "matplotlib>=3.8",
     "tqdm>=4.66",

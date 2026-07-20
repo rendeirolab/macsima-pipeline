@@ -1,5 +1,7 @@
 """Viz smoke tests using a small synthetic multi-channel TIFF."""
 
+# ruff: noqa: E402 - pytest.importorskip must run before optional heavy imports.
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +11,7 @@ import pytest
 
 pytest.importorskip("tifffile")
 pytest.importorskip("matplotlib")
+ad = pytest.importorskip("anndata")
 
 import matplotlib
 
@@ -18,7 +21,7 @@ import tifffile
 import pandas as pd
 
 from macsima_pipeline.config import load_config
-from macsima_pipeline.viz import io, render, workers
+from macsima_pipeline.viz import cell_maps, channel_qc, io, render, workers
 
 
 def _write_default(p: Path) -> None:
@@ -55,6 +58,21 @@ def _make_pyramid_tiff(path: Path, c: int = 3, y: int = 1024, x: int = 1024) -> 
         tw.write(full, photometric="minisblack", subifds=2)
         tw.write(half, photometric="minisblack")
         tw.write(quarter, photometric="minisblack")
+
+
+def _make_channel_qc_tiff(path: Path) -> None:
+    full = np.zeros((4, 64, 64), dtype=np.uint16)
+    full[0] = 5
+    full[1] = 10
+    full[1, 16:48, 16:48] = 100
+    full[2] = np.iinfo(np.uint16).max
+    full[3] = 10
+    full[3, :8, :] = 200
+    full[3, -8:, :] = 200
+    full[3, :, :8] = 200
+    full[3, :, -8:] = 200
+    with tifffile.TiffWriter(str(path), bigtiff=True) as tw:
+        tw.write(full, photometric="minisblack")
 
 
 def test_pyramid_pick(tmp_path: Path) -> None:
@@ -200,6 +218,78 @@ def test_filtered_markers_keep_physical_tiff_indices(tmp_path: Path) -> None:
     assert ci["channel_index"].tolist() == [1, 3]
 
 
+def test_channel_qc_metric_cases(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    qc = cfg.viz.channel_qc
+    bg = np.full((32, 32), 10, dtype=np.uint16)
+    bright = np.full((32, 32), 10, dtype=np.uint16)
+    bright[8:24, 8:24] = 100
+    metrics = channel_qc.compute_channel_metrics(bright, qc, background_img=bg)
+    assert metrics["snr_p99"] > qc.min_snr
+    assert metrics["positive_fraction"] == pytest.approx(0.25)
+
+    weak = np.full((32, 32), 10, dtype=np.uint16)
+    metrics = channel_qc.compute_channel_metrics(weak, qc)
+    assert metrics["snr_p99"] == pytest.approx(0.0)
+    assert metrics["positive_fraction"] == pytest.approx(0.0)
+
+    saturated = np.full((32, 32), np.iinfo(np.uint16).max, dtype=np.uint16)
+    metrics = channel_qc.compute_channel_metrics(saturated, qc)
+    assert metrics["saturated_fraction"] == pytest.approx(1.0)
+
+    uneven = np.full((32, 32), 10, dtype=np.uint16)
+    uneven[:4, :] = 200
+    uneven[-4:, :] = 200
+    uneven[:, :4] = 200
+    uneven[:, -4:] = 200
+    metrics = channel_qc.compute_channel_metrics(uneven, qc)
+    assert metrics["edge_center_ratio"] > 2.5
+
+
+def test_channel_qc_variant_outputs_and_bg_comparison(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, output_format="pdf")
+    cfg.viz.parallel.workers = 1
+    cfg.viz.channel_qc.workers = 1
+    sample = tmp_path / "sample"
+    sample.mkdir()
+    pd.DataFrame(
+        {
+            "marker_name": ["bg_001_CD8-FITC", "CD8", "SAT", "UNEVEN"],
+            "cycle_number": [1, 1, 1, 1],
+            "Filter": ["FITC", "FITC", "APC", "PE"],
+            "background": [np.nan, "bg_001_CD8-FITC", np.nan, np.nan],
+            "exposure": [100, 100, 50, 40],
+            "remove": [True, False, False, False],
+        }
+    ).to_csv(sample / "markers.csv", index=False)
+    path = sample / "rack-01-well-C01-roi-001-exp-2.ome.tif"
+    _make_channel_qc_tiff(path)
+    roi = render.resolve_roi(path, cfg)
+    channel_info = workers._load_channel_info(cfg, sample, bg=False)
+
+    df = channel_qc.run_variant_qc(cfg, [roi], channel_info, sample, bg=False)
+    assert df is not None
+    assert channel_qc.is_valid_qc_csv(channel_qc.qc_csv_path(cfg, bg=False))
+    assert render.is_valid_output(channel_qc.qc_pdf_path(cfg, bg=False), "pdf")
+    assert set(["mean", "p99", "snr_p99", "positive_fraction", "flags"]).issubset(df.columns)
+    cd8 = df[df["marker_name"].eq("CD8")].iloc[0]
+    assert cd8["channel_index"] == 1
+    assert cd8["background_channel_index"] == 0
+    assert bool(df[df["marker_name"].eq("SAT")]["saturated"].iloc[0])
+    assert bool(df[df["marker_name"].eq("UNEVEN")]["uneven"].iloc[0])
+
+    bg_df = df.copy()
+    bg_df["variant"] = "bg-sub"
+    bg_df["bg_subtracted"] = True
+    bg_df["median"] = bg_df["median"] * 0.8
+    bg_df["p99"] = bg_df["p99"] * 0.8
+    bg_df.to_csv(channel_qc.qc_csv_path(cfg, bg=True), index=False)
+    comparison = channel_qc.write_bg_comparison(cfg)
+    assert comparison is not None
+    assert channel_qc.comparison_csv_path(cfg).is_file()
+    assert render.is_valid_output(channel_qc.comparison_pdf_path(cfg), "pdf")
+
+
 def test_roi_grid_reads_physical_channels_and_keeps_titles(tmp_path: Path, monkeypatch) -> None:
     cfg = _cfg(tmp_path)
     roi = render.RoiImage("ROI9", tmp_path / "unused.tif", io.PyramidLevel(0, (4, 8, 8)))
@@ -241,3 +331,83 @@ def test_output_validation_and_atomic_save_failure(tmp_path: Path, monkeypatch) 
         render._save_figure_atomic(BrokenFigure(), out, cfg)
     assert out.read_bytes() == b"%PDF-old\n%%EOF\n"
     assert not list(tmp_path.glob(".*.tmp.pdf"))
+
+
+def _synthetic_adata(*, with_xy: bool = True, xy_names: tuple[str, str] = ("x", "y")):
+    obs = pd.DataFrame(
+        {
+            "ROI": ["ROI1", "ROI1", "ROI2", "ROI2"],
+            "Sample": ["A", "A", "B", "B"],
+            "Patient_ID": ["P1", "P1", "P2", "P2"],
+        },
+        index=["cell1", "cell2", "cell3", "cell4"],
+    )
+    if with_xy:
+        obs[xy_names[0]] = [10.0, 40.0, 8.0, 30.0]
+        obs[xy_names[1]] = [5.0, 45.0, 12.0, 35.0]
+    var = pd.DataFrame(index=["DAPI", "CD8", "CD4", "Ki67"])
+    x = np.array(
+        [
+            [120.0, 5.0, 0.0, 2.0],
+            [90.0, 0.0, 12.0, 0.0],
+            [140.0, 18.0, 4.0, 7.0],
+            [80.0, 3.0, 0.0, 1.0],
+        ]
+    )
+    return ad.AnnData(X=x, obs=obs, var=var)
+
+
+def test_cell_map_xy_column_detection() -> None:
+    assert cell_maps.resolve_xy_columns(_synthetic_adata().obs) == ("x", "y")
+    assert cell_maps.resolve_xy_columns(
+        _synthetic_adata(xy_names=("centroid_x", "centroid_y")).obs
+    ) == ("centroid_x", "centroid_y")
+
+
+def test_plot_cell_map_qc_summary_pdf(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, output_format="pdf")
+    out = tmp_path / "cell_maps.pdf"
+    cell_maps.plot_cell_map_qc_summary(_synthetic_adata(), cfg, out, bg=False, h5ad_path=tmp_path / "cells.h5ad")
+
+    assert out.read_bytes().startswith(b"%PDF-")
+    assert render.is_valid_output(out, "pdf")
+
+
+def test_plot_cell_map_qc_summary_without_coordinates(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, output_format="pdf")
+    out = tmp_path / "cell_maps_missing_xy.pdf"
+    cell_maps.plot_cell_map_qc_summary(_synthetic_adata(with_xy=False), cfg, out, bg=True)
+
+    assert render.is_valid_output(out, "pdf")
+
+
+def test_plot_cell_map_colored_by_cell_type(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, output_format="pdf")
+    adata = _synthetic_adata()
+    adata.obs["cell_type"] = pd.Categorical(["T cell", "B cell", "T cell", "Macrophage"])
+    out = tmp_path / "cell_maps_typed.pdf"
+    cell_maps.plot_cell_map_qc_summary(adata, cfg, out, bg=False)
+    assert render.is_valid_output(out, "pdf")
+    # cell_type must not be mistaken for ROI-level metadata
+    assert "cell_type" in cell_maps._INTERNAL_OBS_COLUMNS
+    assert "cell_type" not in cell_maps._metadata_columns(cell_maps._obs_with_roi(adata), ("x", "y"))
+
+
+def test_plot_cell_map_qc_summary_phenotype_page(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, output_format="pdf")
+    adata = _synthetic_adata()
+    adata.obs["cell_type"] = pd.Categorical(["T cell", "B cell", "T cell", "Macrophage"])
+    adata.uns["phenotype"] = {
+        "engines": ["astir", "flowsom"],
+        "primary_engine": "astir",
+        "agreement": {"accuracy": 0.9, "cohen_kappa": 0.8, "adjusted_rand": 0.75},
+        "spatial_qc": {
+            "labels": ["T cell", "B cell", "Macrophage"],
+            "homophily": {"overall": 0.6, "per_type": {"T cell": 0.7}},
+            "nhood_zscore": np.eye(3, dtype="float32"),
+        },
+        "composition": pd.crosstab(adata.obs["ROI"], adata.obs["cell_type"], normalize="index"),
+    }
+    out = tmp_path / "cell_maps_pheno.pdf"
+    cell_maps.plot_cell_map_qc_summary(adata, cfg, out, bg=False)
+    assert render.is_valid_output(out, "pdf")
