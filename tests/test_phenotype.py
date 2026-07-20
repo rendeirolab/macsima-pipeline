@@ -448,8 +448,6 @@ _MINIMAL_DEFAULT = """\
 experiment:
   name: REQUIRED
   raw_root: REQUIRED
-containers:
-  macsima2mc_sif: macsima2mc.sif
 mcmicro:
   params_yaml: configs/mcmicro_params.yaml
   background_subtraction: false

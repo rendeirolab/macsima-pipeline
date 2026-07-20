@@ -38,10 +38,23 @@ class PathsCfg(BaseModel):
     logs_dir: Path = Path("logs")
 
 
-class ContainersCfg(BaseModel):
+class StagingCfg(BaseModel):
+    """Stage 1 (native staging) knobs. Replaces the old macsima2mc Docker/apptainer step."""
+
     model_config = ConfigDict(extra="forbid")
-    macsima2mc_sif: Path
-    multiplex_macsima_sif: Path | None = None
+    reference_marker: str = "DAPI"
+    illumination_correction: bool = True  # BaSiCPy flatfield -> `corr_` outputs (as before)
+    hi_exposure_only: bool = False  # keep only the highest exposure level per ROI
+    remove_reference_marker: bool = False  # mark DAPI remove=TRUE after the first cycle
+    output_subdir: str = "raw"
+    cycle_glob: str = "*Cycle*"  # cycle folders staged within each ROI (excludes *Scan2 AF)
+
+
+class PanelCfg(BaseModel):
+    """Pre-staging marker-panel sanity check (cell-type signatures live in the phenotype stage)."""
+
+    model_config = ConfigDict(extra="forbid")
+    marker_panel_csv: str = "marker_panel.csv"
 
 
 class McmicroCfg(BaseModel):
@@ -304,7 +317,8 @@ class Config(BaseModel):
 
     experiment: ExperimentCfg
     paths: PathsCfg = PathsCfg()
-    containers: ContainersCfg
+    staging: StagingCfg = StagingCfg()
+    panel: PanelCfg = PanelCfg()
     mcmicro: McmicroCfg
     preprocess: PreprocessCfg = PreprocessCfg()
     viz: VizCfg = VizCfg()
@@ -378,6 +392,17 @@ class Config(BaseModel):
 
     def figures_dir(self) -> Path:
         return self.paths.work_dir / self.resolve(self.paths.figures_dir)
+
+    def staging_root(self) -> Path:
+        """Experiment-level staged-output dir: mcmicro_output/<exp> (holds the sample subdirs)."""
+        return self.paths.work_dir / self.paths.staging_out / self.experiment.name
+
+    def artifacts_dir(self) -> Path:
+        """Per-experiment artifacts dir (marker panel, cell-type template, zarr/h5ad)."""
+        return self.paths.work_dir / "artifacts" / self.experiment.name
+
+    def marker_panel_path(self) -> Path:
+        return self.artifacts_dir() / self.panel.marker_panel_csv
 
     def jobs_csv(self, stage: str) -> Path:
         return self.paths.work_dir / self.paths.jobs_dir / f"{stage}_{self.experiment.name}.csv"
@@ -470,8 +495,8 @@ def _strip_required(d: Any) -> None:
 #
 # A batch config carries a top-level `experiments:` list instead of a single
 # `experiment:` mapping. Each entry is expanded into a standalone
-# single-experiment `Config` sharing every other section (containers, slurm,
-# mcmicro, segmentation, viz, phenotype). `Config` itself stays single-experiment
+# single-experiment `Config` sharing every other section (staging, panel, slurm,
+# mcmicro, preprocess, viz, phenotype). `Config` itself stays single-experiment
 # so all stage code, path helpers, and SLURM templates work unchanged.
 
 

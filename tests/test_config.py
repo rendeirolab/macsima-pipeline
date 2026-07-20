@@ -21,8 +21,6 @@ def _minimal_default() -> str:
 experiment:
   name: REQUIRED
   raw_root: REQUIRED
-containers:
-  macsima2mc_sif: macsima2mc.sif
 mcmicro:
   params_yaml: configs/mcmicro_params.yaml
   nextflow_config: configs/cemm.nextflow.config

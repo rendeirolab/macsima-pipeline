@@ -22,7 +22,6 @@ def _cfg(tmp_path: Path, name: str) -> Config:
         {
             "experiment": {"name": name, "raw_root": str(tmp_path / "raw")},
             "paths": {"work_dir": str(tmp_path)},
-            "containers": {"macsima2mc_sif": "macsima2mc.sif"},
             "mcmicro": {"params_yaml": "configs/mcmicro_params.yaml", "background_subtraction": False},
             "phenotype": {"signature_matrix": "sig.yaml"},
             "slurm": {

@@ -20,7 +20,6 @@ def _cfg(tmp_path: Path, raw_root: Path, roi_metadata_csv: str | None = None) ->
                 "roi_metadata_csv": roi_metadata_csv,
             },
             "paths": {"work_dir": str(tmp_path)},
-            "containers": {"macsima2mc_sif": "macsima2mc.sif"},
             "mcmicro": {"params_yaml": "configs/mcmicro_params.yaml"},
             "slurm": {
                 "staging": {"partition": "t", "qos": "t", "cpus": 1, "mem": "1G", "time": "1:00:00"},

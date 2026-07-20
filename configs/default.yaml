@@ -21,9 +21,19 @@ paths:
   jobs_dir: "jobs"
   logs_dir: "logs"
 
-containers:
-  macsima2mc_sif: "macsima2mc.sif"
-  # multiplex_macsima_sif: "multiplex_macsima.sif"   # currently unused; uncomment if needed
+staging:
+  # Stage 1 is now native Python (no Docker/apptainer). Reproduces the macsima2mc contract.
+  reference_marker: "DAPI"
+  illumination_correction: true   # BaSiCPy flatfield -> `corr_` outputs (matches previous container run)
+  hi_exposure_only: false         # keep every exposure level (downstream consumes exp-2)
+  remove_reference_marker: false  # mark DAPI remove=TRUE after the first cycle
+  output_subdir: "raw"
+  cycle_glob: "*Cycle*"           # cycle folders per ROI; excludes the *Scan2 autofluorescence scan
+
+panel:
+  # Marker-panel sanity summary, generated before staging. (Cell-type signatures for
+  # phenotyping are produced by the phenotype stage / gen-signature, not here.)
+  marker_panel_csv: "marker_panel.csv"
 
 mcmicro:
   params_yaml: "configs/mcmicro_params.yaml"

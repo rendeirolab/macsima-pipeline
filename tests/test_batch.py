@@ -19,8 +19,6 @@ experiment:
   name: REQUIRED
   raw_root: REQUIRED
   roi_exclude: ["ROI0"]
-containers:
-  macsima2mc_sif: macsima2mc.sif
 mcmicro:
   params_yaml: configs/mcmicro_params.yaml
 slurm:

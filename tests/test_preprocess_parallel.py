@@ -26,8 +26,6 @@ def _write_cfg(tmp_path: Path, *, bg: bool | str = "auto", max_workers: int = 4)
 experiment:
   name: tx
   raw_root: {tmp_path / "raw"}
-containers:
-  macsima2mc_sif: macsima2mc.sif
 mcmicro:
   params_yaml: configs/mcmicro_params.yaml
   background_subtraction: {_bg_yaml(bg)}
