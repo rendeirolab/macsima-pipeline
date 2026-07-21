@@ -1,0 +1,82 @@
+# =============================================================================
+# Cell-type signature — metpredict (mouse-host breast cancer PDX; primary + lung met)
+# =============================================================================
+# Design: HUMAN tumor graft in a MOUSE host. The species backbone is the two lamin
+# stains — every population is anchored on hLaminB1 (human graft) vs mLaminB (mouse
+# host) so tumor is never confused with reactive mouse stroma/immune, and human tumor
+# cells that seeded the mouse lung are separated from mouse lung parenchyma.
+#
+# Questions this annotation is built to answer:
+#   • Tumor cell state along the metastatic axis — basal vs luminal, and epithelial
+#     vs EMT/mesenchymal (Vimentin/ZEB1/Slug) — and how it shifts primary -> lung met.
+#   • Tumor microenvironment remodeling — myeloid polarization (M1 vs M2/TAM),
+#     monocyte/neutrophil/eosinophil influx, DC and lymphocyte content.
+#   • Angiogenesis / vascular niche (blood vs lymphatic endothelium) and CAF content,
+#     which differ between the primary bed and the lung metastatic niche.
+#   • Proliferation & stress are read as PER-CELL-TYPE intensities (Ki-67, p53, MT1,
+#     SAA3, ...), NOT as separate clusters — see "functional markers" below.
+#
+# `scyan` turns positive(+1)/negative(-1) into its knowledge table; Leiden scores
+# clusters against the same. `parent` sets the coarse label (Tumor / Host epithelium /
+# Endothelial / Fibroblast / Myeloid / Lymphoid).
+#
+# VERIFY against your MACSima antibody datasheets before trusting downstream:
+#   • Singlec5  -> treated as mouse Siglec-F (eosinophils; also alveolar macrophages
+#                 in LUNG — expect Siglec-F+CD11c+ overlap at the met site).
+#   • CD298     -> pan Na/K-ATPase-b3; often an anti-HUMAN-cell clone. If yours is
+#                 anti-human, add it to the tumor `positive` lists as a graft marker.
+#   • CD117-cKIT -> mast cells here, but also marks progenitors / some KIT+ tumor.
+#   • CD66a (CEACAM1) & CD24 -> cross-listed on granulocytes AND epithelium; kept as
+#                 epithelial/luminal refinements only, gated by species (hLaminB1).
+#   • No CD3/CD19/NK1.1 in the panel -> lymphocytes cannot be split into T/B/NK;
+#                 a single CD45+IKZF1+ "Lymphocyte" population is the honest ceiling.
+#
+# Panel markers available:
+#   CD31, Cytokeratin-5, DAPI, FNIP2, CD144-VeCadherin, PRTN3, Slug, Cytokeratin-14
+#   LYVE-1, NR4A1-Nur77, AHR, EMCN, TIMP3, IL-1R1, MT1, VWF
+#   F480, IL-1RA, Ly-6C, CD11b, SAA3, VEGFR2, CD24, CD66a
+#   KRT18, CD11c, CD44, KRT15, CCR7, CD298, GRK3, ADAM8
+#   Cytokeratin-LMW, Ly-6G, CD14, Ki-67, MHCII, ACE, Arginase1, Singlec5
+#   Vimentin, XCR1-CCXCR1, S100a9-a8, THBS1, YM-1-YM-2, CD326, CX3CR1, CCR2
+#   CD324, CD34, ZEB1, CALM5, KRT8, IKZF1, CD117-cKIT, ADAMST1
+#   Apelin-Receptor, p53, CD45, mLaminB, hLaminB1
+#
+# Functional / state markers — intentionally NOT used to define types; analyze as
+# per-cell-type readouts (e.g. % positive per population, primary vs met):
+#   Ki-67 (proliferation), p53 (tumor-suppressor accumulation), MT1 (metallothionein
+#   stress), SAA3 / IL-1R1 / IL-1RA (IL-1 inflammatory axis), AHR, FNIP2, GRK3,
+#   ADAM8 / ADAMST1 / TIMP3 (ECM proteases), CALM5 (epidermal differentiation),
+#   CD66a, CD298, CCR7 (DC maturation/migration).
+# =============================================================================
+
+version: 1
+
+cell_types:
+
+  # ---- Tumor: human graft (hLaminB1+, mLaminB-) ----------------------------
+  Luminal tumor:        {positive: [hLaminB1, KRT8, KRT18, Cytokeratin-LMW, CD326, CD24], negative: [mLaminB, CD45, Cytokeratin-5, Cytokeratin-14, Vimentin], parent: Tumor}
+  Basal tumor:          {positive: [hLaminB1, Cytokeratin-5, Cytokeratin-14, KRT15, CD44], negative: [mLaminB, CD45, CD24], parent: Tumor}
+  EMT tumor:            {positive: [hLaminB1, Vimentin, ZEB1, Slug, CD44], negative: [mLaminB, CD45, CD326, CD324], parent: Tumor}
+
+  # ---- Host epithelium: mouse parenchyma (mLaminB+, cytokeratin+) ----------
+  Normal epithelium:    {positive: [mLaminB, CD326, Cytokeratin-LMW, KRT8], negative: [hLaminB1, CD45, CD31, Vimentin], parent: Host epithelium}
+
+  # ---- Vasculature: mouse host --------------------------------------------
+  Blood endothelial:    {positive: [CD31, CD144-VeCadherin, VWF, EMCN, VEGFR2, CD34, ACE, Apelin-Receptor], negative: [CD45, hLaminB1, LYVE-1, F480, CD326], parent: Endothelial}
+  Lymphatic endothelial: {positive: [LYVE-1, CD31, VEGFR2], negative: [CD45, VWF, F480, hLaminB1], parent: Endothelial}
+
+  # ---- Fibroblast / CAF: mouse host ---------------------------------------
+  Fibroblast CAF:       {positive: [Vimentin, THBS1, mLaminB], negative: [CD45, CD31, hLaminB1, CD326, F480], parent: Fibroblast}
+
+  # ---- Myeloid: mouse host (CD45+) ----------------------------------------
+  Macrophage M2 TAM:    {positive: [CD45, F480, CD11b, Arginase1, YM-1-YM-2], negative: [Ly-6G, hLaminB1, CD31, CD326], parent: Myeloid}
+  Macrophage M1:        {positive: [CD45, F480, CD11b, MHCII], negative: [Arginase1, Ly-6G, Ly-6C], parent: Myeloid}
+  Monocyte classical:   {positive: [CD45, CD11b, Ly-6C, CCR2, CD14], negative: [F480, Ly-6G, MHCII], parent: Myeloid}
+  Monocyte patrolling:  {positive: [CD45, CD11b, CX3CR1, NR4A1-Nur77], negative: [Ly-6C, Ly-6G, MHCII], parent: Myeloid}
+  Neutrophil:           {positive: [CD45, CD11b, Ly-6G, PRTN3, S100a9-a8], negative: [F480, Ly-6C, MHCII], parent: Myeloid}
+  Eosinophil:           {positive: [CD45, Singlec5, CD11b], negative: [Ly-6G, F480, MHCII], parent: Myeloid}
+  Dendritic cell:       {positive: [CD45, CD11c, MHCII, XCR1-CCXCR1, CCR7], negative: [F480, Ly-6G, Ly-6C], parent: Myeloid}
+  Mast cell:            {positive: [CD45, CD117-cKIT], negative: [CD11b, Ly-6G, F480, CD31], parent: Myeloid}
+
+  # ---- Lymphoid: mouse host (no T/B/NK resolution in this panel) -----------
+  Lymphocyte:           {positive: [CD45, IKZF1], negative: [CD11b, F480, Ly-6G, CD11c, CD31], parent: Lymphoid}

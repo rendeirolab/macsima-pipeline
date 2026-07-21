@@ -4,8 +4,8 @@ Runs *before* the (expensive) staging compute — it only parses raw filenames, 
 enough to run at submit time on a login node. It writes ``artifacts/<exp>/marker_panel.csv``
 (one row per cycle x marker x filter: which cycles, filters, exposures and how many ROIs carry
 each marker) and validates the acquired panel, so you can catch acquisition problems before
-committing compute. Cell-type signatures for phenotyping are handled separately by the
-`gen-signature` / phenotype stage.
+committing compute. The `panel` CLI command additionally scaffolds a shared cell-type
+signature template (``signature.yaml``) next to the config for the user to curate.
 """
 
 from __future__ import annotations
@@ -115,9 +115,12 @@ def write_marker_panel(cfg: Config, scan: pd.DataFrame) -> pd.DataFrame:
     return panel
 
 
-def generate(cfg: Config):
-    """Full pre-staging step: scan -> sanity check -> write marker panel. Returns the panel path."""
+def generate(cfg: Config) -> pd.DataFrame:
+    """Full pre-staging step: scan -> sanity check -> write marker panel.
+
+    Returns the marker-panel summary frame (the CLI unions its ``marker_name`` column
+    across experiments to scaffold a shared phenotyping signature template).
+    """
     scan = scan_experiment(cfg)
     sanity_check(cfg, scan)
-    write_marker_panel(cfg, scan)
-    return cfg.marker_panel_path()
+    return write_marker_panel(cfg, scan)

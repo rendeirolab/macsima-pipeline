@@ -13,7 +13,7 @@
 #
 # Scaffold the per-experiment inputs from this same config:
 #   macsima-pipeline gen-roi-metadata --config configs/batch_example.yaml --columns Sample
-#   macsima-pipeline gen-markers      --config configs/batch_example.yaml   # after staging
+#   macsima-pipeline panel            --config configs/batch_example.yaml   # marker panel + signature.yaml
 
 extends: "default.yaml"
 

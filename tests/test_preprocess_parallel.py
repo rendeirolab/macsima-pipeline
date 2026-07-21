@@ -122,9 +122,10 @@ def test_jobs_csv_contains_variant_and_part_paths(tmp_path: Path) -> None:
 
     assert csv_path == tmp_path / "jobs" / "preprocess_tx.csv"
     assert len(roundtrip) == 1
-    assert roundtrip[0].image_path == img
-    assert roundtrip[0].part_zarr == tmp_path / "artifacts" / "tx" / "preprocess_parts_no_bs" / "007" / "007.zarr"
-    assert roundtrip[0].part_h5ad.name == "007_cell_expression.h5ad"
+    # image_path now points at the consolidated results copy, not the mcmicro source.
+    assert roundtrip[0].image_path == cfg.variant_images_dir(False) / "007.ome.tif"
+    assert roundtrip[0].seg_path == cfg.segmentation_dir() / "tx_ROI7_segmentation_no_bs.parquet"
+    assert roundtrip[0].part_h5ad == cfg.preprocess_parts_path(False) / "007.h5ad"
 
 
 def test_slurm_submit_supports_array_throttle(monkeypatch, tmp_path: Path) -> None:
@@ -188,7 +189,7 @@ def test_preprocess_run_submits_worker_array_then_merge(monkeypatch, tmp_path: P
     ]
 
 
-def test_merge_preprocess_parts_concatenates_anndata_and_writes_spatialdata(
+def test_merge_preprocess_parts_concatenates_anndata_and_cleans_parts(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -196,9 +197,13 @@ def test_merge_preprocess_parts_concatenates_anndata_and_writes_spatialdata(
     cfg.experiment.roi_metadata_csv = Path("roi_metadata.csv")
     (tmp_path / "roi_metadata.csv").write_text("ROI,Sample\nROI1,Tumor\n")
 
-    part_zarr = tmp_path / "parts" / "001.zarr"
-    part_h5ad = tmp_path / "parts" / "001.h5ad"
-    part_zarr.mkdir(parents=True)
+    # Workers already wrote the final segmentation parquet + a transient h5ad part.
+    seg_path = cfg.segmentation_dir() / "tx_ROI1_segmentation_no_bs.parquet"
+    seg_path.parent.mkdir(parents=True, exist_ok=True)
+    seg_path.touch()
+    parts_dir = cfg.preprocess_parts_path(False)
+    part_h5ad = parts_dir / "001.h5ad"
+    parts_dir.mkdir(parents=True)
     part_h5ad.touch()
     h5ad_writes = {}
 
@@ -227,90 +232,19 @@ def test_merge_preprocess_parts_concatenates_anndata_and_writes_spatialdata(
                 variant="no-bg-sub",
                 roi_name="001",
                 image_path=tmp_path / "image.ome.tif",
-                part_zarr=part_zarr,
+                seg_path=seg_path,
                 part_h5ad=part_h5ad,
             )
         ],
     )
-    written = []
-
-    class FakeSpatialData:
-        def write(self, path: str) -> None:
-            written.append(Path(path))
-            Path(path).mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(preprocess, "_merge_spatialdata_parts", lambda _paths: FakeSpatialData())
 
     outputs = preprocess.merge_preprocess_parts(cfg, jobs_csv)
 
-    assert outputs == [(cfg.zarr_path(False), cfg.h5ad_path(False))]
-    # _write_sdata_atomic writes to a temp store then renames it to the dest.
-    assert len(written) == 1
-    assert cfg.zarr_path(False).is_dir()
-    tmp = cfg.zarr_path(False).parent / (cfg.zarr_path(False).name + ".tmp")
-    assert not tmp.exists()
+    # Merge returns the cells h5ad path(s); no zarr is produced anymore.
+    assert outputs == [cfg.h5ad_path(False)]
+    assert cfg.h5ad_path(False).is_file()
     assert list(h5ad_writes[cfg.h5ad_path(False)]["ROI"]) == ["ROI1"]
     assert list(h5ad_writes[cfg.h5ad_path(False)]["Sample"]) == ["Tumor"]
-
-
-def test_merge_replaces_existing_zarr_store(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    """A stale destination zarr is atomically replaced by the fresh merge output."""
-    cfg, _ = _write_cfg(tmp_path, bg=False)
-    cfg.experiment.roi_metadata_csv = Path("roi_metadata.csv")
-    (tmp_path / "roi_metadata.csv").write_text("ROI,Sample\nROI1,Tumor\n")
-
-    part_zarr = tmp_path / "parts" / "001.zarr"
-    part_h5ad = tmp_path / "parts" / "001.h5ad"
-    part_zarr.mkdir(parents=True)
-    part_h5ad.touch()
-
-    class FakeAnnData:
-        def __init__(self, obs: pd.DataFrame):
-            self.obs = obs
-
-        def write_h5ad(self, path: str) -> None:
-            path = Path(path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
-
-    fake_anndata = SimpleNamespace(
-        read_h5ad=lambda _path: FakeAnnData(pd.DataFrame({"ROI": ["ROI1"]}, index=["cell1"])),
-        concat=lambda adatas: FakeAnnData(pd.concat([a.obs for a in adatas])),
-    )
-    monkeypatch.setitem(sys.modules, "anndata", fake_anndata)
-
-    jobs_csv = preprocess.write_jobs_csv(
-        cfg,
-        [
-            preprocess.PreprocessJob(
-                job_id=1,
-                bg=False,
-                variant="no-bg-sub",
-                roi_name="001",
-                image_path=tmp_path / "image.ome.tif",
-                part_zarr=part_zarr,
-                part_h5ad=part_h5ad,
-            )
-        ],
-    )
-
-    # Simulate a stale store left behind by a previous run.
-    stale = cfg.zarr_path(False)
-    stale.mkdir(parents=True)
-    (stale / "stale.txt").write_text("old")
-
-    class FakeSpatialData:
-        def write(self, path: str) -> None:
-            Path(path).mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(preprocess, "_merge_spatialdata_parts", lambda _paths: FakeSpatialData())
-
-    preprocess.merge_preprocess_parts(cfg, jobs_csv)
-
-    assert cfg.zarr_path(False).is_dir()
-    assert not (cfg.zarr_path(False) / "stale.txt").exists()
-    tmp = cfg.zarr_path(False).parent / (cfg.zarr_path(False).name + ".tmp")
-    assert not tmp.exists()
+    # Transient per-ROI parts are removed; the final segmentation parquet is kept.
+    assert not parts_dir.exists()
+    assert seg_path.is_file()

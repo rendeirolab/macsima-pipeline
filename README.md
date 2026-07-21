@@ -2,7 +2,7 @@
 
 Config-driven pipeline for MACSIMA multiplexed imaging data on a SLURM HPC.
 
-One YAML config per experiment. One CLI (`macsima-pipeline`) drives five stages: **stage → mcmicro → preprocess → phenotype → viz**. Each stage submits a SLURM job (array where it makes sense); `all` chains them with `afterok` dependencies.
+You write one YAML config per experiment. A single CLI, `macsima-pipeline`, drives five stages: **stage → mcmicro → preprocess → phenotype → viz**. Each stage submits a SLURM job, using an array where that makes sense. The `all` command chains the stages together with `afterok` dependencies.
 
 ---
 
@@ -11,7 +11,7 @@ One YAML config per experiment. One CLI (`macsima-pipeline`) drives five stages:
 1. [Concepts](#1-concepts)
 2. [Layout](#2-repository-layout)
 3. [Install](#3-install)
-4. [First run — step by step](#4-first-run--step-by-step)
+4. [First run: step by step](#4-first-run-step-by-step)
 5. [Pipeline stages in detail](#5-pipeline-stages-in-detail)
 6. [Config reference](#6-config-reference)
 7. [SLURM behaviour](#7-slurm-behaviour)
@@ -22,7 +22,7 @@ One YAML config per experiment. One CLI (`macsima-pipeline`) drives five stages:
 
 ## 1. Concepts
 
-**Goal.** Take raw MACSima cycle output and produce: registered OME-TIFFs (per ROI), a `SpatialData` zarr with cell segmentations, a per-cell `AnnData` (`.h5ad`) with expression + ROI metadata, PDF marker/ROI visualisation grids, and a cell-map QC summary PDF.
+**Goal.** Turn raw MACSima cycle output into one per-experiment `results/<exp>/` tree. That tree holds four kinds of output: processed OME-TIFFs (one per ROI, with or without background subtraction); cell segmentations as GeoParquet; a per-cell `AnnData` (`.h5ad`) carrying expression values and ROI metadata; and QC/visualisation PDFs. No pixel data is duplicated on disk, and no SpatialData zarr store is written.
 
 **Why this repo exists.** Replaces per-experiment copy-paste scripts in `metpredict-macsima` (`expr10_*.py`, `expr10_*.sh`). One config, one CLI, same code for every experiment.
 
@@ -30,30 +30,35 @@ One YAML config per experiment. One CLI (`macsima-pipeline`) drives five stages:
 
 ```
 raw MACSima cycles (per ROI)
-        │  panel   (sanity-check marker panel — at plan time)
+        │  panel   (sanity-check marker panel, at plan time)
         │  stage   (native: tifffile + ome-types + BaSiCPy; SLURM array, 1 task per ROI)
         ▼
-mcmicro_output/{exp}/rack-…-roi-…-exp-2/   ← mcmicro-ingestable per-sample dirs
+mcmicro_output/{exp}/rack-…-roi-…-exp-2/   ← mcmicro-ingestable per-sample dirs (scratch)
         │  mcmicro (Nextflow + Singularity, SLURM array, 1 task per sample)
+        │          publish_dir_mode=link → OME-TIFFs are hardlinks (no copy)
+        │  finalize (hardlink OME-TIFFs + markers into the results tree; auto, idempotent)
         ▼
-        sample/registration/*.ome.tif       ← Ashlar-registered pyramidal OME-TIFFs
+results/{exp}/images/registration/{roi}.ome.tif   ← no-bg variant  (0 extra bytes)
+results/{exp}/images/backsub/{roi}.ome.tif         ← bg-sub variant
         │  preprocess (SLURM GPU array, 1 task per ROI, then merge)
         ▼
-{exp}_mcmicro_no_bs.zarr                    ← SpatialData (images + segmentations + cell tables)
-{exp}_cell_expression_mcmicro_no_bs.h5ad    ← AnnData (cells × markers, obs merged with roi_metadata.csv)
-        │  phenotype (1 GPU job; normalize + Astir + FlowSOM + spatial QC)
+results/{exp}/segmentation/{exp}_ROI{n}_segmentation{suffix}.parquet  ← GeoParquet polygons
+results/{exp}/cells/{exp}_cells{suffix}.h5ad        ← AnnData (cells × markers, obs merged with roi_metadata.csv)
+        │  phenotype (1 GPU job; normalize + scyan + Leiden + spatial QC)
         ▼
-{exp}_phenotyped_mcmicro_no_bs.h5ad         ← AnnData + obs['cell_type'], layers, obsm['spatial'], uns['phenotype']
+results/{exp}/cells/{exp}_cells_phenotyped{suffix}.h5ad  ← + obs['cell_type'], layers, obsm['spatial'], uns['phenotype']
         │  viz (1 CPU job; joblib-parallel)
         ▼
-figures/{exp}/ *.pdf                        ← per-marker grids, per-ROI grids, RGB combinations
-figures/{exp}/qc/*cell_maps_summary*.pdf    ← cell XY maps (colored by cell type) + QC summary
-figures/{exp}/phenotype/*phenotype_summary*.pdf ← composition, confidence, spatial coherence
+results/{exp}/qc/rois/*.pdf                  ← per-marker grids, per-ROI grids, RGB combinations
+results/{exp}/qc/*cell_maps_summary*.pdf     ← cell XY maps (colored by cell type) + QC summary
+results/{exp}/qc/phenotype/*phenotype_summary*.pdf ← composition, confidence, spatial coherence
 ```
 
-**Config inheritance.** `configs/default.yaml` holds every key. Each experiment cfg (`experiments/<exp>/config.yaml`) only needs `extends:` + the few keys that differ (typically `experiment.name`, `experiment.raw_root`, maybe `viz.combinations`). Merge is right-biased deep merge; child `None` does not clobber a non-null base.
+**Config inheritance.** `configs/default.yaml` holds every key. An experiment config (`experiments/<exp>/config.yaml`) needs only `extends:` plus the few keys that differ, usually `experiment.name`, `experiment.raw_root`, and sometimes `viz.combinations`. The merge is a right-biased deep merge, and a child `None` never clobbers a non-null base value.
 
-**Suffix.** `mcmicro.background_subtraction: false` (default) appends `_no_bs` to zarr/h5ad filenames. Set true to use background-subtracted images and drop suffix.
+**Suffix.** With `mcmicro.background_subtraction: false`, the per-variant filenames (segmentation parquet, cells h5ad, QC) get a `_no_bs` suffix. With `true`, the pipeline uses background-subtracted images and adds no suffix. The shipped default is `"auto"`: it runs whichever variants mcmicro produced, i.e. both when both exist.
+
+**No duplication.** mcmicro publishes with `publish_dir_mode=link`, and the `finalize` step hardlinks the per-ROI OME-TIFFs into `results/<exp>/images/`. Each image is therefore one inode with several names, never a second copy on disk. Nothing is deleted automatically. Reclaim the Nextflow `work/` directory and the staged `raw/` tiles whenever you want with `macsima-pipeline clean`.
 
 ---
 
@@ -61,7 +66,7 @@ figures/{exp}/phenotype/*phenotype_summary*.pdf ← composition, confidence, spa
 
 ```
 configs/
-  default.yaml            full schema + defaults — every key documented
+  default.yaml            full schema + defaults; every key documented
   mcmicro_params.yaml     mcmicro params (passed via --params)
   cemm.nextflow.config    cluster-specific nextflow config
   *.sbatch.j2             Jinja2 sbatch templates (one per stage)
@@ -76,21 +81,22 @@ src/macsima_pipeline/
   staging_core.py         native macsima2mc port: parse → stack → OME-TIFF + markers.csv (+BaSiCPy)
   panel.py                pre-staging marker panel sanity check
   mcmicro.py              stage 2
+  finalize.py             consolidate mcmicro OME-TIFFs into results/<exp>/images (hardlinks)
   preprocess.py           stage 3 (run_inproc + SLURM worker array + merge)
-  phenotype/              stage 4 (normalize + engines + spatial QC + report)
-  lib/astir/              clean-room Astir model (independent impl; see NOTICE)
+  phenotype/              stage 4 (normalize + scyan + Leiden + spatial QC + report)
   viz/                    stage 5 (workers + plotting)
+  clean.py                opt-in scratch reclamation (work/, raw/, orphaned zarr)
   slurm.py                sbatch render + sbatch submit
 jobs/                     generated per-stage csv + sbatch (gitignored)
 logs/                     SLURM stdout/stderr (gitignored)
-artifacts/{exp}/          marker_panel.csv, zarr/h5ad (gitignored)
+results/{exp}/            all deliverables: images/ segmentation/ cells/ qc/ panel/ (gitignored)
 ```
 
 ---
 
 ## 3. Install
 
-Prereqs on the cluster: `uv`; plus Nextflow + `apptainer`/singularity **for the mcmicro stage only** — staging is now native Python and needs no container.
+You need `uv` on the cluster. The mcmicro stage also needs Nextflow and `apptainer`/singularity, but nothing else does: staging is now native Python and needs no container.
 
 ```bash
 # 1. Clone
@@ -99,7 +105,7 @@ git clone <repo> && cd macsima-pipeline
 # 2. Python env (uv reads pyproject.toml + uv.lock)
 uv sync
 
-# 3. Verify (staging is native — no macsima2mc container to pull)
+# 3. Verify (staging is native; no macsima2mc container to pull)
 uv run macsima-pipeline --help
 ```
 
@@ -107,7 +113,7 @@ mcmicro pulls its own images via Nextflow on first run; nothing to do here besid
 
 ---
 
-## 4. First run — step by step
+## 4. First run: step by step
 
 Walk through with the bundled `expr34` example. Substitute your own paths for a new experiment.
 
@@ -153,8 +159,8 @@ ROI3,Ovarian Cancer,30108919
 
 Path is resolved relative to `paths.work_dir` (default `.`).
 
-Generate a template for the exact ROIs the pipeline will process (reuses the
-staging ROI discovery, so `roi_exclude` etc. are applied) — then just fill in the
+Generate a template for the exact ROIs the pipeline will process. It reuses the
+staging ROI discovery, so `roi_exclude` and friends are applied. Then fill in the
 columns:
 
 ```bash
@@ -166,26 +172,21 @@ uv run macsima-pipeline gen-roi-metadata --config experiments/myexp/config.yaml 
 It needs `raw_root` mounted (run on a node where RawData is reachable) and refuses
 to overwrite an existing file unless you pass `--force`.
 
-You can also snapshot the marker panel `macsima2mc` produced (a review/curation
-artifact with a normalized `remove` column) once staging has run:
-
-```bash
-uv run macsima-pipeline gen-markers --config experiments/myexp/config.yaml
-```
-
 ### 4.3b (Optional) Phenotype signature
 
-The phenotype stage (Astir + FlowSOM) needs a **signature matrix** — a marker→cell-type
+The phenotype stage (scyan + Leiden) needs a **signature matrix**, a marker-to-cell-type
 table (`phenotype.signature_matrix`). If it is unset, the phenotype stage skips (the chain
-still runs). Scaffold a template from your panel (post-staging), then curate it:
+still runs). The pre-staging `panel` command scaffolds one shared `signature.yaml` next to
+your config (union of markers across the config's experiments):
 
 ```bash
-uv run macsima-pipeline gen-signature --config experiments/myexp/config.yaml
-# → wrote signature_myexp.yaml (panel markers listed + example cell types to edit)
+uv run macsima-pipeline panel --config experiments/myexp/config.yaml
+# → wrote signature.yaml (panel markers listed + example cell types to edit)
 ```
 
 Fill in `positive`/`negative` markers per cell type, then set
-`phenotype.signature_matrix` to that path. See `configs/signature_example.yaml`.
+`phenotype.signature_matrix` to that path. `panel` won't overwrite your edits (pass
+`--force` to regenerate). See `configs/signature_example.yaml`.
 
 ### 4.4 Dry-run each stage
 
@@ -243,7 +244,7 @@ tail -F logs/staging_myexp_<jobid>_*.out
 
 Stage outputs are deterministic per (config, raw data). To redo just one stage, delete its outputs (e.g. `mcmicro_output/myexp/`) and submit it again. The `--dependency` flag lets you re-attach downstream stages without rerunning everything.
 
-### 4.9 Batch — multiple experiments in one config
+### 4.9 Batch: multiple experiments in one config
 
 MACSima data usually arrives in batches over weeks. Instead of one config file per
 experiment, a **batch config** lists several under a top-level `experiments:` key.
@@ -264,8 +265,8 @@ experiments:
     roi_metadata_csv: "configs/batch_example/expr35_roi_metadata.csv"
 ```
 
-Every command works on a batch config unchanged — it runs **one independent chain
-per experiment** (outputs stay isolated by `experiment.name`):
+Every command works on a batch config unchanged. It runs **one independent chain
+per experiment**, with outputs kept separate by `experiment.name`:
 
 ```bash
 uv run macsima-pipeline all --config configs/batch_example.yaml --submit
@@ -290,15 +291,15 @@ Notes: each entry inherits the shared `experiment:` defaults (e.g. `roi_exclude:
 and overrides only what differs. Experiment names must be unique. Batch submission
 materializes a flattened per-experiment config under `jobs/batch/<name>.yaml` (this is
 what the SLURM continuation jobs re-load); single-experiment configs are used as-is and
-write nothing extra. Marker panels are **not** assumed shared across experiments — each
+write nothing extra. Marker panels are **not** assumed shared across experiments; each
 reads its own `markers.csv` exactly as before.
 
-**Phenotyping in a batch.** `all` phenotypes each experiment **independently** (one model
-per experiment; cell-type *names* come from the shared signature, but model calibration and
-FlowSOM cluster ids are not comparable across experiments, and there is no cross-experiment
-batch correction). For **joint** phenotyping — one Astir/FlowSOM model over all experiments,
-comparable labels, cross-experiment batch correction — run the dedicated command after the
-per-experiment preprocess outputs exist:
+**Phenotyping in a batch.** `all` phenotypes each experiment **independently**: one model per
+experiment. The cell-type *names* still come from the shared signature, but scyan calibration and
+Leiden cluster ids are not comparable across experiments, and there is no cross-experiment batch
+correction. For **joint** phenotyping (one scyan/Leiden model over all experiments, giving comparable
+labels and cross-experiment batch correction), run the dedicated command once the per-experiment
+preprocess outputs exist:
 
 ```bash
 uv run macsima-pipeline phenotype-joint --config experiments/<batch>/config.yaml --submit
@@ -306,7 +307,7 @@ uv run macsima-pipeline phenotype-joint --config experiments/<batch>/config.yaml
 
 It concatenates every experiment's cell-expression h5ad (inner-join on shared markers), tags
 each cell with `experiment` + a unique `sample` (experiment|ROI), fits the engines once,
-writes a combined phenotyped h5ad under `artifacts/<batch-folder>/`, and splits the joint
+writes a combined phenotyped h5ad under `results/<batch-folder>/cells/`, and splits the joint
 labels back into each experiment's phenotyped h5ad (so per-experiment viz picks them up).
 `--batch-key` (default `sample`) sets the batch-correction unit; `--inproc` runs locally;
 `--only NAME` restricts the set.
@@ -315,48 +316,56 @@ labels back into each experiment's phenotyped h5ad (so per-experiment viz picks 
 
 ## 5. Pipeline stages in detail
 
-### Stage 0 — `panel` (runs automatically before `stage`)
+### Stage 0: `panel` (runs automatically before `stage`)
 
-From the raw filenames alone (fast, no pixel reads) writes `artifacts/<exp>/marker_panel.csv`
-(per-cycle panel summary — sanity-check that the run acquired what you expect) and validates the
+From the raw filenames alone (fast, no pixel reads) writes `results/<exp>/panel/marker_panel.csv`
+(a per-cycle panel summary, so you can sanity-check that the run acquired what you expect) and validates the
 panel: reference marker present in every cycle, consistent markers across ROIs, background
-acquisitions present. `stage` runs this at plan time; run it standalone with
-`macsima-pipeline panel --config …`. (Cell-type signatures for phenotyping are produced
-separately — see the phenotype stage / `gen-signature`.)
+acquisitions present. `stage` runs the marker-panel check at plan time; the standalone
+`macsima-pipeline panel --config …` command also scaffolds a shared `signature.yaml`
+(phenotyping cell-type template) next to the config for you to curate before submitting.
 
-### Stage 1 — `stage`
+### Stage 1: `stage`
 
-Native Python — no container. `staging_core.py` reimplements macsima2mc v1.3.1 with `tifffile` +
-`ome-types`. Discovers ROIs via `experiment.raw_root` + `experiment.roi_glob` minus `roi_exclude`,
-writes `jobs/staging_<exp>.csv` (one row per ROI = one SLURM array task); each task stages every
-`*Cycle*` folder of its ROI. Per cycle it parses the MACSima filenames, groups tiles by
-`(source, exposure_level)`, orders channels reference-marker-first (backfilling DAPI into exposure
-levels that didn't reacquire it), optionally applies BaSiCPy flatfield correction
-(`staging.illumination_correction`, default on → `corr_` prefix), and writes multi-series
-OME-TIFFs + `markers.csv` to `mcmicro_output/<exp>/rack-X-well-Y-roi-Z-exp-N/`. Behaviour is
-tunable under `staging:` in the config; output is drop-in compatible with the previous container.
+Native Python, no container. `staging_core.py` reimplements macsima2mc v1.3.1 with `tifffile` and
+`ome-types`. It discovers ROIs from `experiment.raw_root` and `experiment.roi_glob`, minus
+`roi_exclude`, and writes `jobs/staging_<exp>.csv` with one row per ROI. One row is one SLURM array
+task, and each task stages every `*Cycle*` folder of its ROI.
 
-### Stage 2 — `mcmicro`
+For each cycle it parses the MACSima filenames and groups tiles by `(source, exposure_level)`. It
+orders channels reference-marker-first, backfilling DAPI into exposure levels that did not reacquire
+it. It optionally applies BaSiCPy flatfield correction (`staging.illumination_correction`, on by
+default, which adds a `corr_` prefix). Finally it writes multi-series OME-TIFFs plus `markers.csv` to
+`mcmicro_output/<exp>/rack-X-well-Y-roi-Z-exp-N/`. Everything here is tunable under `staging:` in the
+config, and the output is drop-in compatible with the previous container.
 
-For each staged sample dir matching `mcmicro.sample_pattern` (default `rack-*-well-*-roi-*-exp-2`), runs `nextflow run labsyspharm/mcmicro -profile singularity` with `mcmicro.params_yaml`. Produces Ashlar-registered pyramidal OME-TIFFs at `<sample>/registration/<…>exp-2.ome.tif` (or `<sample>/background/<…>_backsub.ome.tif` if `background_subtraction: true`).
+### Stage 2: `mcmicro`
 
-### Stage 3 — `preprocess`
+For each staged sample dir matching `mcmicro.sample_pattern` (default `rack-*-well-*-roi-*-exp-2`), this stage runs `nextflow run labsyspharm/mcmicro -profile singularity` with `mcmicro.params_yaml`. It produces Ashlar-registered pyramidal OME-TIFFs at `<sample>/registration/<…>exp-2.ome.tif`, or at `<sample>/background/<…>_backsub.ome.tif` when `background_subtraction: true`.
 
-On SLURM, this is a two-phase stage: a GPU worker array runs one task per concrete `(background variant, ROI image)`, then a CPU merge job assembles final experiment-level outputs. `--inproc` is still available for local/debug runs and iterates all ROIs in one process. Steps per ROI:
+The run passes `--publish_dir_mode link` and a pinned `-work-dir`, so the published OME-TIFFs are **hardlinks** into the Nextflow `work/` scratch: one inode, no copy. This works only when `work/` and the output tree share a filesystem (both live under `/nobackup` here).
 
-1. Load registered OME-TIFF as dask array, keep channels listed in the mcmicro `markers.csv` with `remove != True`.
-2. Wrap as `Image2DModel` with `scale_factors` pyramid (default `[2, 4]`).
+### Finalize (image consolidation)
+
+Between mcmicro and preprocess, `finalize.consolidate_images` hardlinks each sample's `registration`/`background` OME-TIFF into a flat, readable layout: `results/<exp>/images/{registration,backsub}/{roi}.ome.tif`. It also copies the markers CSVs once per experiment. All of this still adds zero bytes. The step is idempotent and runs automatically at the start of `preprocess` and `viz`. To run it on its own, use `macsima-pipeline finalize --config <cfg>`.
+
+### Stage 3: `preprocess`
+
+On SLURM, this is a two-phase stage: a GPU worker array runs one task per concrete `(background variant, ROI image)`, then a CPU merge job assembles the final per-variant cell table. `--inproc` is still available for local/debug runs and iterates all ROIs in one process. Steps per ROI:
+
+1. Load the consolidated OME-TIFF (`results/<exp>/images/<variant>/<roi>.ome.tif`) as a dask array, keeping the channels in `markers.csv` with `remove != True`.
+2. Wrap it as an in-memory `Image2DModel` with the `scale_factors` pyramid (default `[2, 4]`). This is never persisted to disk.
 3. `sopa.make_image_patches` → `sopa.segmentation.custom_staining_based` with Cellpose4 (`cpsam` model) on DAPI.
 4. `sopa.aggregate` → per-cell expression table.
 
-Each worker writes intermediate per-ROI parts under `paths.preprocess_parts_dir`. The merge job validates all expected parts, concatenates per-ROI cell tables into one `AnnData`, records explicit `obs["ROI"]`, left-joins `roi_metadata.csv` on `ROI`, writes the final `.h5ad`, and combines per-ROI SpatialData elements into the final `.zarr`.
+Each worker writes its ROI's segmentation polygons straight to the final file, `results/<exp>/segmentation/<exp>_ROI<n>_segmentation<suffix>.parquet` (GeoParquet, with columns `cell_id`, `ROI`, `centroid_x`, `centroid_y`, and `area`). It also writes a transient per-ROI cell-table part. The merge job then validates the parts, concatenates the per-ROI cell tables into one `AnnData`, records an explicit `obs["ROI"]`, left-joins `roi_metadata.csv` on `ROI`, and writes `results/<exp>/cells/<exp>_cells<suffix>.h5ad`. It deletes the transient parts afterward. No SpatialData zarr is written.
 
-The public `macsima-pipeline preprocess --submit` command submits the worker array first and then a merge job dependent on that array. Before MCMICRO outputs exist, dry-run reports that exact array planning is deferred until the OME-TIFFs are available.
+The public `macsima-pipeline preprocess --submit` command submits the worker array first and then a merge job dependent on that array. Before mcmicro outputs exist, dry-run reports that exact array planning is deferred until the OME-TIFFs are available.
 
-### Stage 4 — `phenotype`
+### Stage 4: `phenotype`
 
-Reads the per-variant `.h5ad` (all ROIs jointly) and assigns cell types, writing a
-separate `{exp}_phenotyped_mcmicro{suffix}.h5ad`. One GPU job per variant; `--inproc`
+Reads the per-variant cells `.h5ad` (all ROIs jointly) and assigns cell types, writing a
+separate `{exp}_cells_phenotyped{suffix}.h5ad`. One GPU job per variant; `--inproc`
 runs locally. Skips gracefully (exit 0, chain still proceeds) when disabled or when no
 `phenotype.signature_matrix` is set. Steps:
 
@@ -365,29 +374,28 @@ runs locally. Skips gracefully (exit 0, chain still proceeds) when disabled or w
 2. **Batch** (`phenotype.batch`): per-ROI z-score by default (ComBat / quantile options),
    at the intensity stage so markers stay interpretable.
 3. **Engines** (`phenotype.engines`), both driven by the same signature matrix:
-   - **Astir** — clean-room probabilistic model (`src/macsima_pipeline/lib/astir`, an
-     independent implementation of Geuenich et al. 2021; **not** the GPL-2.0 package —
-     see its `NOTICE`). Reads RAW counts; GPU-batched. → per-cell probabilities + labels.
-   - **FlowSOM** — SOM + consensus metaclustering (reproducible), metaclusters labeled
-     against the signature. Reads the z-scored layer.
-4. **Cross-engine agreement** (Cohen's κ, ARI) — a confidence signal; disagreement
-   flags batch/ambiguous markers.
+   - **scyan**: a Bayesian normalizing-flow model (torch + lightning) that gives probabilistic
+     per-cell assignments. It reads the arcsinh + z-scored layer, and a GPU speeds up training.
+   - **Leiden**: a scanpy kNN graph plus Leiden clustering (`flavor="igraph"`). Clusters are
+     auto-labeled against the signature, so labels are comparable to scyan's. Reads the z-scored layer.
+4. **Cross-engine agreement** (Cohen's κ, ARI): a confidence signal. Disagreement flags
+   batch effects or ambiguous markers.
 5. **Spatial QC** (`phenotype.spatial_qc`): neighborhood enrichment + same-type homophily
    per ROI. This is the automatic version of "do the labels make sense on the map?".
 
-Writes `obs['cell_type' | 'cell_type_coarse' | 'cell_type_confidence' | 'flowsom' |
-'pheno_agree']`, `obsm['spatial']`, `uns['phenotype']`, and a QC PDF under
-`figures/{exp}/phenotype/`. The **signature matrix** is a small YAML naming expected
-positive/negative markers per cell type (optional lineage `parent`); point
+Writes `obs['cell_type', 'cell_type_coarse', 'cell_type_confidence', 'scyan_celltype',
+'leiden', 'leiden_celltype', 'pheno_agree']`, `obsm['spatial']`, `uns['phenotype']`, and a
+QC PDF under `results/{exp}/qc/phenotype/`. The **signature matrix** is a small YAML that names the
+expected positive and negative markers for each cell type, with an optional lineage `parent`. Point
 `phenotype.signature_matrix` at it.
 
-### Stage 5 — `viz`
+### Stage 5: `viz`
 
-Loads the mcmicro OME-TIFFs, plus the variant `.h5ad` for cell-map QC when available
-(prefers the phenotyped h5ad, so cell maps are colored by `cell_type` and a spatial
-coherence page is added). For each marker, picks the pyramid level whose largest XY dim ≤
-`viz.target_max_dim` (default 2048), computes 1–99 percentile clips (cached to parquet
-for resume), and renders:
+Loads the consolidated OME-TIFFs from `results/<exp>/images/<variant>/`. For cell-map QC it also loads
+the variant cells `.h5ad` when present, preferring the phenotyped one; that colors cell maps by
+`cell_type` and adds a spatial-coherence page. For each marker it picks the pyramid level whose largest
+XY dim is ≤ `viz.target_max_dim` (default 2048), computes 1–99 percentile clips (cached to parquet for
+resume), and renders:
 
 - one PDF per marker showing that marker across all ROIs (grid),
 - one PDF per ROI showing all markers (grid),
@@ -417,17 +425,17 @@ See `configs/default.yaml` for every key with inline comments. Selected keys:
 | `preprocess.patches` | `patch_width` | Sopa patch size for segmentation; lower this if CUDA memory is tight |
 | `preprocess.parallel.max_workers` | worker array throttle | maximum concurrent preprocessing workers |
 | `phenotype` | `signature_matrix` | path to the signature YAML; `null` → stage skips (chain still runs) |
-| `phenotype` | `engines`, `primary_engine` | which engines to run (`astir`, `flowsom`); which populates `cell_type` |
+| `phenotype` | `engines`, `primary_engine` | which engines to run (`scyan`, `leiden`); which populates `cell_type` |
 | `phenotype.normalize` | `transform`, `cofactor`, `clip_percentile`, `zscore` | per-marker normalization (arcsinh; tune `cofactor` to your intensity scale) |
 | `phenotype.batch` | `method`, `batch_key` | intensity-stage batch handling (`zscore_per_roi` default) |
-| `phenotype.astir` | `cofactor`, `min_confidence`, `include_batch_covariate` | Astir engine (reads RAW counts; per-ROI baseline) |
-| `phenotype.flowsom` | `grid_size`, `n_metaclusters`, `train_subsample` | FlowSOM engine (reads z-scored layer) |
+| `phenotype.scyan` | `max_epochs`, `lr`, `prior_std`, `temperature`, `log_prob_th`, `min_confidence` | scyan engine (normalizing-flow; reads z-scored layer) |
+| `phenotype.leiden` | `n_neighbors`, `resolution`, `n_iterations`, `tau` | Leiden engine (kNN graph + Leiden; reads z-scored layer) |
 | `phenotype.spatial_qc` | `n_neighs`, `nhood_enrichment`, `homophily` | spatial-coherence QC |
 | `viz` | `combinations` | list of `{name, markers: [m1, m2, m3]}` → RGB plots |
 | `viz` | `cell_maps`, `cell_map_marker_top_n`, `cell_map_point_size` | default-on cell XY + expression QC summary PDF controls |
 | `slurm.<stage>` | `partition`, `qos`, `cpus`, `mem`, `time`, `gres`, `comment` | sbatch header values |
 
-**Placeholder expansion.** `{experiment_name}` and `{suffix}` are expanded in `paths.zarr_out`, `paths.h5ad_out`, `paths.figures_dir`.
+**Placeholder expansion.** `{experiment_name}` and `{suffix}` are expanded in `paths.results_dir`, `paths.cells_out`, `paths.phenotype_cells_out`.
 
 ---
 
@@ -456,22 +464,27 @@ Defaults (override under `slurm.<stage>` in your config):
 
 Relative to `paths.work_dir` (default `.`):
 
+Everything a user consumes lives under `results/<exp>/`; scratch/state stays outside it.
+
 | Path | Stage | Contents |
 |---|---|---|
-| `mcmicro_output/<exp>/<sample>/` | stage 1 | mcmicro-ingestable cycle dirs |
-| `mcmicro_output/<exp>/<sample>/registration/*.ome.tif` | stage 2 | registered pyramidal OME-TIFF per ROI |
-| `<exp>_mcmicro_no_bs.zarr/` | stage 3 | SpatialData (images + segmentations + cell expression tables) |
-| `<exp>_cell_expression_mcmicro_no_bs.h5ad` | stage 3 | AnnData (cells × markers, obs with ROI + metadata) |
-| `figures/<exp>/*.pdf` | stage 4 | marker grids, ROI grids, RGB combinations |
-| `figures/<exp>/qc/*cell_maps_summary*.pdf` | stage 4 | experiment and per-ROI cell-map QC summary |
-| `jobs/`, `logs/` | all | sbatch + CSV + SLURM logs |
+| `results/<exp>/images/{registration,backsub}/<roi>.ome.tif` | finalize | processed OME-TIFF per ROI (hardlink; no-bg / bg-sub) |
+| `results/<exp>/images/markers.csv`, `background/markers_bs.csv` | finalize | channel panels for each variant |
+| `results/<exp>/segmentation/<exp>_ROI<n>_segmentation<suffix>.parquet` | stage 3 | GeoParquet cell polygons (+ centroid/area/cell_id/ROI) |
+| `results/<exp>/cells/<exp>_cells<suffix>.h5ad` | stage 3 | AnnData (cells × markers, obs with ROI + metadata) |
+| `results/<exp>/cells/<exp>_cells_phenotyped<suffix>.h5ad` | stage 4 | + `cell_type`, layers, `obsm['spatial']`, `uns['phenotype']` |
+| `results/<exp>/qc/rois/*.pdf` | stage 5 | marker grids, ROI grids, RGB combinations |
+| `results/<exp>/qc/*cell_maps_summary*.pdf`, `*channel_qc*` | stage 5 | cell-map + channel QC summaries |
+| `results/<exp>/qc/phenotype/*phenotype_summary*.pdf` | stage 4 | composition, confidence, spatial coherence |
+| `results/<exp>/panel/marker_panel.csv` | panel | pre-staging marker-panel summary |
+| `mcmicro_output/`, `work/`, `jobs/`, `logs/` | all | scratch/state (reclaim `work/` + `raw/` with `macsima-pipeline clean`) |
 
 ---
 
 ## 9. Troubleshooting
 
 **`ValidationError: viz.combinations Input should be a valid list`**
-Your child config has `viz: combinations:` with only commented items — that parses as `None`. Use `combinations: []` (loader now also tolerates `None`, but be explicit).
+Your child config has `viz: combinations:` with only commented-out items, which parses as `None`. Use `combinations: []` instead. (The loader now tolerates `None`, but being explicit is clearer.)
 
 **`raw_root not found`**
 `experiment.raw_root` must be the directory that *directly contains* `ROI*` subdirs (typically `…/RawData/R1/B1` or `…/RawData/R1/C1`). Check with `ls "$raw_root"/ROI* | head`.
@@ -492,7 +505,10 @@ Path is resolved relative to `paths.work_dir`. From the repo root, `experiments/
 Bump `slurm.preprocess.mem` / `time` for CPU RAM or walltime issues. For CUDA OOM, lower `preprocess.patches.patch_width`, e.g. `1024` for large ROIs or smaller GPUs. The default is bounded at `2048` so Cellpose does not receive full ROIs at once. If the GPU is still too small, request a larger GPU in `slurm.preprocess.gres` or set `preprocess.segmentation.gpu: false` as a slower CPU fallback.
 
 **Viz resume.**
-Percentile cache is parquet under `figures/<exp>/`; deleting it forces re-computation. `viz.cache_percentiles: false` disables.
+Percentile cache is parquet under `results/<exp>/qc/_cache/`; deleting it forces re-computation. `viz.cache_percentiles: false` disables.
+
+**Reclaiming disk.**
+Nothing is auto-deleted. `macsima-pipeline clean --config <cfg>` is dry-run by default; pass `--yes` with `--work` (Nextflow `work/` + `.nextflow*`, disables `-resume`), `--raw` (staged `raw/` tiles for samples already in `results/`), `--orphaned-zarr` (pre-refactor `artifacts/<exp>/*.zarr`), or `--everything`.
 
 ---
 

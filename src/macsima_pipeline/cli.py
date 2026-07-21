@@ -9,6 +9,8 @@ from pathlib import Path
 
 from cyclopts import App
 
+from . import clean as clean_stage
+from . import finalize as finalize_stage
 from . import mcmicro as mcmicro_stage
 from . import panel as panel_stage
 from . import preprocess as preprocess_stage
@@ -56,12 +58,25 @@ def _expand(config: Path, only: list[str] | None = None) -> list[Path]:
 
 
 @app.command(sort_key=0)
-def panel(config: Path, only: list[str] | None = None) -> None:
-    """Pre-staging: sanity-check the acquired marker panel (writes artifacts/<exp>/marker_panel.csv)."""
+def panel(config: Path, only: list[str] | None = None, force: bool = False) -> None:
+    """Pre-staging: sanity-check the marker panel + scaffold the phenotyping signature.
+
+    For each experiment writes artifacts/<exp>/marker_panel.csv; then unions the markers
+    across experiments and writes ONE editable signature.yaml next to the config (skipped
+    if it exists — pass --force to regenerate). Curate it before submitting jobs.
+    """
+    markers: list[str] = []
+    seen = False
     for p in _expand(config, only):
+        cfg = _load(p)
         banner("Marker panel — sanity check", subtitle=str(p))
-        mp = panel_stage.generate(_load(p))
-        log.info("marker panel -> [path]%s[/]", mp)
+        df = panel_stage.generate(cfg)
+        log.info("marker panel -> [path]%s[/]", cfg.marker_panel_path())
+        markers.extend(str(m) for m in df["marker_name"])
+        seen = True
+    if seen:
+        dest = config.parent / "signature.yaml"
+        scaffold.write_signature_template(config.parent.name, list(dict.fromkeys(markers)), dest, force=force)
 
 
 @app.command(sort_key=1)
@@ -135,12 +150,16 @@ def preprocess(
 def _preprocess_one(
     config: Path, submit: bool, dependency: int | None, inproc: bool
 ) -> int | None:
-    banner("Stage 3 — preprocess (SpatialData + Cellpose4)", subtitle=str(config))
+    banner("Stage 3 — preprocess (segment + cell table)", subtitle=str(config))
     cfg = _load(config)
     if inproc:
         outputs = preprocess_stage.run_inproc(cfg)
-        for zarr, h5ad in outputs:
-            log.info("preprocess inproc done: zarr=[path]%s[/] h5ad=[path]%s[/]", zarr, h5ad)
+        for seg_paths, h5ad in outputs:
+            log.info(
+                "preprocess inproc done: [count]%d[/] segmentation parquet(s), cells=[path]%s[/]",
+                len(seg_paths),
+                h5ad,
+            )
         return None
     dep = str(dependency) if dependency else None
     return preprocess_stage.run(cfg, config.resolve(), do_submit=submit, dependency=dep)
@@ -151,8 +170,8 @@ def preprocess_worker(config: Path, jobs_csv: Path, task_id: int) -> None:
     """Internal: run one SLURM-array preprocessing worker."""
     banner("Stage 3 worker — preprocess ROI", subtitle=f"{config} :: task {task_id}")
     cfg = _load(config)
-    zarr, h5ad = preprocess_stage.run_worker(cfg, jobs_csv, task_id)
-    log.info("preprocess worker done: zarr=[path]%s[/] h5ad=[path]%s[/]", zarr, h5ad)
+    seg_path, part_h5ad = preprocess_stage.run_worker(cfg, jobs_csv, task_id)
+    log.info("preprocess worker done: segmentation=[path]%s[/] part=[path]%s[/]", seg_path, part_h5ad)
 
 
 @app.command(name="preprocess-merge", sort_key=97)
@@ -161,8 +180,8 @@ def preprocess_merge(config: Path, jobs_csv: Path) -> None:
     banner("Stage 3 merge — preprocess parts", subtitle=str(config))
     cfg = _load(config)
     outputs = preprocess_stage.merge_preprocess_parts(cfg, jobs_csv)
-    for zarr, h5ad in outputs:
-        log.info("preprocess merge done: zarr=[path]%s[/] h5ad=[path]%s[/]", zarr, h5ad)
+    for h5ad in outputs:
+        log.info("preprocess merge done: cells=[path]%s[/]", h5ad)
 
 
 @app.command(sort_key=4)
@@ -227,7 +246,7 @@ def viz(
 
 
 def _viz_one(config: Path, submit: bool, dependency: int | None, inproc: bool) -> int | None:
-    banner("Stage 4 — viz (PDF grids)", subtitle=str(config))
+    banner("Stage 5 — viz (PDF grids)", subtitle=str(config))
     cfg = _load(config)
     if inproc:
         # Import lazily so dry-run + sbatch generation don't pull matplotlib/tifffile
@@ -452,48 +471,54 @@ def gen_roi_metadata(
         )
 
 
-@app.command(name="gen-markers", sort_key=8)
-def gen_markers(
-    config: Path,
-    output: Path | None = None,
-    experiment: str | None = None,
-    bg: bool = False,
-    force: bool = False,
-) -> None:
-    """Consolidate the macsima2mc-generated markers.csv into a canonical panel.
+@app.command(sort_key=8)
+def finalize(config: Path, only: list[str] | None = None) -> None:
+    """Consolidate mcmicro OME-TIFFs into results/<exp>/images/ (hardlinks; idempotent).
 
-    Post-staging: reads the markers.csv from the first staged sample, normalizes the
-    `remove` column, and writes a per-experiment panel (a review/curation artifact — it
-    does NOT change what preprocess reads). --bg uses markers_bs.csv; --force overwrites.
+    Runs automatically before preprocess/viz; exposed here for manual/standalone use.
     """
-    banner("Utility — gen markers panel", subtitle=str(config))
-    cfgs = expand_config(config, only=[experiment] if experiment else None)
-    if output is not None and len(cfgs) > 1:
-        raise ValueError("--output applies to a single experiment; use --experiment NAME to pick one")
-    for cfg in cfgs:
-        scaffold.gen_markers(cfg, config_path=config, output=output, bg=bg, force=force)
+    for path in _expand(config, only):
+        cfg = _load(path)
+        banner("Finalize — consolidate images into results/", subtitle=str(path))
+        n = finalize_stage.consolidate_images(cfg)
+        log.info("finalized [count]%d[/] image link(s) -> [path]%s[/]", n, cfg.images_dir())
 
 
-@app.command(name="gen-signature", sort_key=9)
-def gen_signature(
+@app.command(sort_key=9)
+def clean(
     config: Path,
-    output: Path | None = None,
-    experiment: str | None = None,
-    bg: bool = False,
-    force: bool = False,
+    work: bool = False,
+    raw: bool = False,
+    orphaned_zarr: bool = False,
+    everything: bool = False,
+    yes: bool = False,
+    only: list[str] | None = None,
 ) -> None:
-    """Scaffold the scyan/Leiden signature (marker->cell-type table) from the panel.
+    """Reclaim pipeline scratch space. DRY-RUN unless --yes.
 
-    Post-staging: reads the marker panel and writes a signature YAML template listing
-    all panel markers + example cell types to curate. Set phenotype.signature_matrix at
-    the result (otherwise the phenotype stage skips). --experiment NAME targets one.
+    Opt-in per target: --work (Nextflow work/ + .nextflow*, disables -resume),
+    --raw (staged raw/ tiles for samples already consolidated into results/),
+    --orphaned-zarr (pre-refactor artifacts/<exp>/*.zarr + preprocess_parts*).
+    --everything selects all three; --only NAME restricts per-experiment targets.
     """
-    banner("Utility — gen signature template", subtitle=str(config))
-    cfgs = expand_config(config, only=[experiment] if experiment else None)
-    if output is not None and len(cfgs) > 1:
-        raise ValueError("--output applies to a single experiment; use --experiment NAME to pick one")
+    if everything:
+        work = raw = orphaned_zarr = True
+    if not (work or raw or orphaned_zarr):
+        log.warning("nothing selected; pass --work / --raw / --orphaned-zarr or --everything")
+        return
+
+    banner("Clean — reclaim scratch" + ("" if yes else " (dry-run)"), subtitle=str(config))
+    cfgs = [_load(p) for p in _expand(config, only)]
+    if work and cfgs:
+        # work_dir + .nextflow state is shared across a batch — clean it once.
+        clean_stage.clean_work(cfgs[0], do_delete=yes)
     for cfg in cfgs:
-        scaffold.gen_signature(cfg, config_path=config, output=output, bg=bg, force=force)
+        if raw:
+            clean_stage.clean_raw(cfg, do_delete=yes)
+        if orphaned_zarr:
+            clean_stage.clean_orphaned_zarr(cfg, do_delete=yes)
+    if not yes:
+        log.warning("[warn]dry-run[/]: nothing deleted — re-run with --yes to remove the above.")
 
 
 def _joint_name(config: Path) -> str:

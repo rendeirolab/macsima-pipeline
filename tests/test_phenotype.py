@@ -538,7 +538,7 @@ def test_run_inproc_write_back_contract(tmp_path: Path, monkeypatch) -> None:
     assert set(out.obs["cell_type"].astype(str)) <= {"T cell", "B cell", "Macrophage"}
 
     # QC PDF was produced
-    assert (cfg.figures_dir() / "phenotype" / "pheno_phenotype_summary_no_bs.pdf").is_file()
+    assert (cfg.qc_dir() / "phenotype" / "pheno_phenotype_summary_no_bs.pdf").is_file()
 
 
 def test_run_inproc_skips_without_signature(tmp_path: Path, monkeypatch) -> None:

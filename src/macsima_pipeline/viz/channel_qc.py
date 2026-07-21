@@ -38,19 +38,19 @@ QC_REQUIRED_COLUMNS = {
 
 
 def qc_csv_path(cfg: Config, bg: bool) -> Path:
-    return cfg.figures_dir() / "qc" / f"{cfg.experiment.name}_mcmicro_channel_qc{cfg.suffix_for(bg)}.csv"
+    return cfg.qc_dir() / f"{cfg.experiment.name}_mcmicro_channel_qc{cfg.suffix_for(bg)}.csv"
 
 
 def qc_pdf_path(cfg: Config, bg: bool) -> Path:
-    return cfg.figures_dir() / "qc" / f"{cfg.experiment.name}_mcmicro_channel_qc_summary{cfg.suffix_for(bg)}.pdf"
+    return cfg.qc_dir() / f"{cfg.experiment.name}_mcmicro_channel_qc_summary{cfg.suffix_for(bg)}.pdf"
 
 
 def comparison_csv_path(cfg: Config) -> Path:
-    return cfg.figures_dir() / "qc" / f"{cfg.experiment.name}_mcmicro_channel_qc_bg_comparison.csv"
+    return cfg.qc_dir() / f"{cfg.experiment.name}_mcmicro_channel_qc_bg_comparison.csv"
 
 
 def comparison_pdf_path(cfg: Config) -> Path:
-    return cfg.figures_dir() / "qc" / f"{cfg.experiment.name}_mcmicro_channel_qc_bg_comparison.pdf"
+    return cfg.qc_dir() / f"{cfg.experiment.name}_mcmicro_channel_qc_bg_comparison.pdf"
 
 
 def is_valid_qc_csv(path: Path) -> bool:

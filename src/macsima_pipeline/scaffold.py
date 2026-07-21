@@ -1,17 +1,16 @@
 """Scaffold utilities.
 
-Two generators that turn a config into the CSV inputs the pipeline consumes:
+Generators that turn a config into inputs the pipeline consumes:
 
-- `gen_roi_metadata`  — PRE-staging. Reuses `staging.discover_rois` to list the
+- `gen_roi_metadata`        — PRE-staging. Reuses `staging.discover_rois` to list the
   exact ROIs the pipeline will process and writes a template `roi_metadata.csv`
   (an `ROI` column + empty user columns) for the user to fill in.
-- `gen_markers`       — POST-staging. Reads the `macsima2mc`-generated `markers.csv`
-  from the first staged sample and writes a canonical per-experiment panel with a
-  normalized `remove` column. A review/curation artifact: it does NOT change the
-  preprocess read path (which still reads each sample's own markers.csv).
+- `write_signature_template` — writes the phenotyping signature YAML template from a
+  marker panel (used by the pre-staging `panel` command). Lists panel markers + example
+  cell types for the user to curate before submitting jobs.
 
-Both operate on a single-experiment `Config`; the CLI loops them over a batch via
-`config.expand_config`.
+`gen_roi_metadata` operates on a single-experiment `Config`; the CLI loops it over a
+batch via `config.expand_config`.
 """
 
 from __future__ import annotations
@@ -20,9 +19,6 @@ import csv
 import logging
 from pathlib import Path
 
-import pandas as pd
-
-from . import preprocess as preprocess_stage
 from . import staging as staging_stage
 from .config import Config
 from .utils import ensure_dir, roi_index_from_name
@@ -105,94 +101,6 @@ def gen_roi_metadata(
     return dest
 
 
-def _to_bool(v: object) -> bool:
-    """Normalize a markers.csv `remove` cell to a clean bool.
-
-    Handles bool, blank/NaN -> False, and string forms (TRUE/False/1/yes/t).
-    """
-    if pd.isna(v):
-        return False
-    if isinstance(v, bool):
-        return v
-    return str(v).strip().lower() in ("true", "1", "yes", "t")
-
-
-def _markers_output_path(cfg: Config, config_path: Path, output: Path | None) -> Path:
-    if output is not None:
-        return output
-    return config_path.parent / f"markers_{cfg.experiment.name}.csv"
-
-
-def _find_markers_csv(cfg: Config, bg: bool) -> Path | None:
-    """Locate the staged markers.csv (first mcmicro sample). None if not staged yet."""
-    try:
-        images = preprocess_stage._find_images(cfg, bg)
-    except FileNotFoundError:
-        return None
-    src = images[0].parent.parent / (cfg.mcmicro.markers_bs_csv if bg else cfg.mcmicro.markers_csv)
-    return src if src.is_file() else None
-
-
-def _panel_markers(cfg: Config, bg: bool = False) -> list[str] | None:
-    """Usable marker names for the panel (as they appear in adata.var_names).
-
-    Mirrors preprocess._load_channel_info: drop `remove == True` rows, dedup on
-    marker_name, preserve order. Returns None if the panel isn't staged yet.
-    """
-    src = _find_markers_csv(cfg, bg)
-    if src is None:
-        return None
-    df = pd.read_csv(src)
-    if "remove" in df.columns:
-        df = df[~df["remove"].map(_to_bool)]
-    names = list(dict.fromkeys(df["marker_name"].astype(str)))
-    return names
-
-
-def gen_markers(
-    cfg: Config,
-    *,
-    config_path: Path,
-    output: Path | None = None,
-    bg: bool = False,
-    force: bool = False,
-) -> Path | None:
-    """Consolidate one experiment's staged markers.csv into a canonical panel.
-
-    Keeps all rows and column/row order; only normalizes the `remove` column
-    (preserving bg_* rows is required — channel_index is the physical TIFF position).
-    Returns the written path, or None if skipped.
-    """
-    name = cfg.experiment.name
-    src = _find_markers_csv(cfg, bg)
-    if src is None:
-        log.warning(
-            "[warn]no staged markers.csv[/] for [stage]%s[/] — it is produced during staging "
-            "(stage 1); run gen-markers after staging completes",
-            name,
-        )
-        return None
-
-    df = pd.read_csv(src)
-    if "remove" in df.columns:
-        df["remove"] = df["remove"].map(_to_bool)
-
-    dest = _markers_output_path(cfg, config_path, output)
-    if dest.exists() and not force:
-        log.warning("[warn]exists[/] [path]%s[/] — pass --force to overwrite", dest)
-        return None
-
-    ensure_dir(dest.parent)
-    df.to_csv(dest, index=False)
-    log.info(
-        "wrote markers panel: [path]%s[/] ([count]%d[/] rows) from [path]%s[/]",
-        dest,
-        len(df),
-        src,
-    )
-    return dest
-
-
 # Common lineage markers -> (positive, negative, parent). Only cell types with >=1
 # positive marker PRESENT in the panel are emitted, as EXAMPLES to edit. Purely a
 # scaffold: the user must curate the actual biology.
@@ -211,15 +119,9 @@ _COMMON_SIGNATURE: list[tuple[str, list[str], list[str], str]] = [
 ]
 
 
-def _signature_output_path(cfg: Config, config_path: Path, output: Path | None) -> Path:
-    if output is not None:
-        return output
-    return config_path.parent / f"signature_{cfg.experiment.name}.yaml"
-
-
 def _render_signature_yaml(name: str, panel: list[str], examples: list[tuple]) -> str:
     lines = [
-        f"# Signature-matrix template for '{name}' (generated by gen-signature).",
+        f"# Signature-matrix template for '{name}' (generated by the panel command).",
         "# EDIT THIS. The cell types below are GENERIC guesses matched from marker names —",
         "# curate positive/negative markers for YOUR panel + tissue. Names must match the panel.",
         "# scyan builds a table from these; Leiden scores clusters. `parent` builds the coarse label.",
@@ -238,33 +140,28 @@ def _render_signature_yaml(name: str, panel: list[str], examples: list[tuple]) -
     return "\n".join(lines) + "\n"
 
 
-def gen_signature(
-    cfg: Config,
+def write_signature_template(
+    name: str,
+    markers: list[str],
+    dest: Path,
     *,
-    config_path: Path,
-    output: Path | None = None,
-    bg: bool = False,
     force: bool = False,
 ) -> Path | None:
-    """Write a signature-matrix YAML template from the staged marker panel.
+    """Write a phenotyping signature-matrix YAML template from a marker panel.
 
-    Lists every usable panel marker (as a reference comment) and pre-fills example
-    cell types built from markers present in the panel, for the user to curate.
-    Post-staging (needs markers.csv). Returns the written path, or None if skipped.
+    Lists every panel marker (as a reference comment) and pre-fills example cell types
+    built from markers present in the panel, for the user to curate. Skips (returns None,
+    logs) when `dest` already exists and `force` is False, so curated edits are never
+    clobbered. Returns the written path.
     """
-    name = cfg.experiment.name
-    panel = _panel_markers(cfg, bg)
-    if panel is None:
-        log.warning(
-            "[warn]no staged markers.csv[/] for [stage]%s[/] — run gen-signature after staging completes",
-            name,
-        )
+    if not markers:
+        log.warning("[bad]empty marker panel[/] — no signature template written")
         return None
-    if not panel:
-        log.warning("[bad]empty marker panel[/] for [stage]%s[/]", name)
+    if dest.exists() and not force:
+        log.warning("[warn]exists[/] [path]%s[/] — pass --force to regenerate", dest)
         return None
 
-    present = set(panel)
+    present = set(markers)
     examples = []
     for nm, pos, neg, parent in _COMMON_SIGNATURE:
         pos_p = [m for m in pos if m in present]
@@ -272,17 +169,12 @@ def gen_signature(
             continue
         examples.append((nm, pos_p, [m for m in neg if m in present], parent))
 
-    dest = _signature_output_path(cfg, config_path, output)
-    if dest.exists() and not force:
-        log.warning("[warn]exists[/] [path]%s[/] — pass --force to overwrite", dest)
-        return None
-
     ensure_dir(dest.parent)
-    dest.write_text(_render_signature_yaml(name, panel, examples))
+    dest.write_text(_render_signature_yaml(name, markers, examples))
     log.info(
         "wrote signature template: [path]%s[/] ([count]%d[/] panel markers, [count]%d[/] example types)",
         dest,
-        len(panel),
+        len(markers),
         len(examples),
     )
     log.info("  edit it, then set [stage]phenotype.signature_matrix[/] to this path")

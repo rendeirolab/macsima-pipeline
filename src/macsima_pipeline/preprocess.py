@@ -1,14 +1,22 @@
-"""Stage 3: build SpatialData from mcmicro outputs, segment cells, export AnnData.
+"""Stage 3: segment cells from the consolidated OME-TIFFs and export cell tables.
 
-The local/debug path still supports one in-process run over all ROIs. The SLURM
-path fans out one GPU array task per (background variant, ROI image), then runs
-a CPU merge job to assemble the final experiment-level SpatialData and AnnData.
+Each ROI is loaded into an in-memory SpatialData, segmented with Cellpose4 (via
+sopa), then two artifacts are written directly under ``results/<exp>/``:
+per-ROI segmentation polygons as GeoParquet (``segmentation/``) and a per-ROI
+AnnData part that the merge step concatenates into ``cells/<exp>_cells.h5ad``.
+No SpatialData Zarr store is persisted — the pixels already live once as
+OME-TIFFs and nothing downstream reads a merged store.
+
+The local/debug path still runs one in-process pass over all ROIs. The SLURM
+path fans out one GPU array task per (background variant, ROI), then a CPU merge
+job concatenates the AnnData parts and deletes them.
 """
 
 from __future__ import annotations
 
 import csv
 import logging
+import os
 import shlex
 import shutil
 import sys
@@ -19,8 +27,9 @@ from pathlib import Path
 import pandas as pd
 
 from .config import Config
+from .finalize import consolidate_images
 from .slurm import render_sbatch, submit, write_sbatch
-from .utils import ensure_dir, roi_name_from_mcmicro_stem
+from .utils import ensure_dir, roi_name_from_results_stem
 
 log = logging.getLogger(__name__)
 
@@ -32,8 +41,8 @@ class PreprocessJob:
     variant: str
     roi_name: str
     image_path: Path
-    part_zarr: Path
-    part_h5ad: Path
+    seg_path: Path  # final per-ROI segmentation parquet under results/<exp>/segmentation/
+    part_h5ad: Path  # transient per-ROI cell-table part (removed after merge)
 
 
 @dataclass(frozen=True)
@@ -79,28 +88,24 @@ def _roi_label_from_mcmicro_name(roi_name: str) -> str:
 
 
 def _find_images(cfg: Config, bg: bool) -> list[Path]:
-    base = cfg.paths.work_dir / cfg.paths.mcmicro_out / cfg.experiment.name
-    pattern = cfg.mcmicro.background_pattern if bg else cfg.mcmicro.registration_pattern
-    images = sorted(base.rglob(pattern))
+    """Consolidated per-ROI OME-TIFFs for one variant: results/<exp>/images/<variant>/*.ome.tif."""
+    base = cfg.variant_images_dir(bg)
+    images = sorted(base.glob("*.ome.tif"))
     if not images:
-        raise FileNotFoundError(f"No images found under {base} matching {pattern}")
+        raise FileNotFoundError(f"No consolidated images found under {base}")
     return images
 
 
 def _load_channel_info(cfg: Config, images: list[Path], bg: bool) -> pd.DataFrame:
-    """Resolve markers CSV from the first mcmicro sample dir."""
-    first_sample = images[0].parent.parent  # .../sample/registration/img.ome.tif -> sample
+    """Resolve the markers CSV consolidated alongside the images (results/<exp>/images/)."""
+    csv_path = cfg.images_dir() / (cfg.mcmicro.markers_bs_csv if bg else cfg.mcmicro.markers_csv)
+    ci = pd.read_csv(csv_path)
+    # Capture the TIFF channel position before any filtering. DataFrame row
+    # numbers after filtering are not physical channel indices.
+    ci["channel_index"] = range(len(ci))
     if bg:
-        csv_path = first_sample / cfg.mcmicro.markers_bs_csv
-        ci = pd.read_csv(csv_path)
-        ci["channel_index"] = range(len(ci))
         ci = ci.drop_duplicates(subset="marker_name").reset_index(drop=True)
     else:
-        csv_path = first_sample / cfg.mcmicro.markers_csv
-        ci = pd.read_csv(csv_path)
-        # Capture the TIFF position before filtering. DataFrame row numbers after
-        # filtering are not physical channel indices.
-        ci["channel_index"] = range(len(ci))
         ci = ci[ci["remove"] != True]  # noqa: E712 — pandas mask, not bool identity
         ci = ci.drop(columns=["remove"]).drop_duplicates(subset="marker_name").reset_index(drop=True)
     log.info("channel_info: [count]%d[/] markers from [path]%s[/]", len(ci), csv_path)
@@ -216,7 +221,7 @@ def _build_spatialdata_for_images(cfg: Config, images: Iterable[Path], channel_i
     imgs_data: dict[str, Image2DModel] = {}
     for img_path in images:
         img = imread(str(img_path))[channel_info["channel_index"]]
-        roi_name = roi_name_from_mcmicro_stem(img_path.stem)
+        roi_name = roi_name_from_results_stem(img_path.stem)
         imgs_data[roi_name] = Image2DModel.parse(
             img,
             dims=("c", "y", "x"),
@@ -277,7 +282,8 @@ def _adata_from_sdata_tables(sdata, roi_labels: dict[str, str] | None = None):
 
     adata.obs.reset_index(inplace=True)
     adata.obs.index = adata.obs.index.astype(str)
-    drop_cols = [c for c in ("cell_id", "region", "index", "slide") if c in adata.obs.columns]
+    # Keep `cell_id` — it is the join key back to the segmentation parquet.
+    drop_cols = [c for c in ("region", "index", "slide") if c in adata.obs.columns]
     adata.obs.drop(columns=drop_cols, inplace=True)
     return adata
 
@@ -299,8 +305,11 @@ def _join_roi_metadata(cfg: Config, adata) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _run_variant(cfg: Config, bg: bool) -> tuple[Path, Path]:
-    """Run the full pipeline for one background-subtraction variant."""
+def _run_variant(cfg: Config, bg: bool) -> tuple[list[Path], Path]:
+    """Run the full pipeline for one background-subtraction variant.
+
+    Returns (list of per-ROI segmentation parquet paths, merged cells h5ad path).
+    """
     label = _variant_label(bg)
     log.info("[ok]variant[/]: [stage]%s[/] (suffix=[path]%s[/])", label, cfg.suffix_for(bg) or "(none)")
 
@@ -308,8 +317,8 @@ def _run_variant(cfg: Config, bg: bool) -> tuple[Path, Path]:
     log.info("found [count]%d[/] image(s)", len(images))
     channel_info = _load_channel_info(cfg, images, bg)
     roi_labels = {
-        roi_name_from_mcmicro_stem(img_path.stem): _roi_label_from_mcmicro_name(
-            roi_name_from_mcmicro_stem(img_path.stem)
+        roi_name_from_results_stem(img_path.stem): _roi_label_from_mcmicro_name(
+            roi_name_from_results_stem(img_path.stem)
         )
         for img_path in images
     }
@@ -317,10 +326,11 @@ def _run_variant(cfg: Config, bg: bool) -> tuple[Path, Path]:
     sdata = _build_spatialdata_for_images(cfg, images, channel_info)
     _segment_spatialdata(cfg, sdata)
 
-    zarr_path = cfg.zarr_path(bg)
-    ensure_dir(zarr_path.parent)
-    log.info("writing SpatialData -> [path]%s[/]", zarr_path)
-    _write_sdata_atomic(sdata, zarr_path)
+    seg_paths: list[Path] = []
+    for roi_key, roi_label in roi_labels.items():
+        dest = _segmentation_path(cfg, bg, roi_key)
+        _write_segmentation_parquet(sdata, roi_key, roi_label, dest)
+        seg_paths.append(dest)
 
     adata = _adata_from_sdata_tables(sdata, roi_labels)
     _join_roi_metadata(cfg, adata)
@@ -329,23 +339,24 @@ def _run_variant(cfg: Config, bg: bool) -> tuple[Path, Path]:
     ensure_dir(h5ad_path.parent)
     log.info("writing AnnData -> [path]%s[/]", h5ad_path)
     adata.write_h5ad(str(h5ad_path))
-    return zarr_path, h5ad_path
+    return seg_paths, h5ad_path
 
 
-def run_inproc(cfg: Config) -> list[tuple[Path, Path]]:
+def run_inproc(cfg: Config) -> list[tuple[list[Path], Path]]:
     """Execute the preprocessing pipeline for every configured bg-sub variant.
 
-    Returns a list of (zarr_path, h5ad_path) tuples — one per variant. In
-    "auto" mode this can be two entries (bg-sub + no-bg-sub) when both image
-    sets exist; in explicit bool mode it's always a single entry.
+    Returns a list of (segmentation_parquet_paths, h5ad_path) tuples — one per
+    variant. In "auto" mode this can be two entries (bg-sub + no-bg-sub) when
+    both image sets exist; in explicit bool mode it's always a single entry.
     """
+    consolidate_images(cfg)  # idempotent: hardlink mcmicro outputs into results/<exp>/images
     modes = cfg.bg_modes()
     log.info(
         "preprocess variants to run: [count]%d[/] (%s)",
         len(modes),
         ", ".join(_variant_label(m) for m in modes),
     )
-    results: list[tuple[Path, Path]] = []
+    results: list[tuple[list[Path], Path]] = []
     for bg in modes:
         try:
             results.append(_run_variant(cfg, bg))
@@ -365,13 +376,22 @@ def run_inproc(cfg: Config) -> list[tuple[Path, Path]]:
 # --------------------------------------------------------------------------- #
 
 
+def _segmentation_path(cfg: Config, bg: bool, roi_name: str) -> Path:
+    """Final per-ROI segmentation parquet under results/<exp>/segmentation/."""
+    label = _roi_label_from_mcmicro_name(roi_name)
+    return cfg.segmentation_dir() / f"{cfg.experiment.name}_{label}_segmentation{cfg.suffix_for(bg)}.parquet"
+
+
 def _part_paths(cfg: Config, bg: bool, roi_name: str) -> tuple[Path, Path]:
-    base = cfg.preprocess_parts_path(bg) / roi_name
-    return base / f"{roi_name}.zarr", base / f"{roi_name}_cell_expression.h5ad"
+    """(final segmentation parquet, transient per-ROI cell-table h5ad part)."""
+    seg_path = _segmentation_path(cfg, bg, roi_name)
+    part_h5ad = cfg.preprocess_parts_path(bg) / f"{roi_name}.h5ad"
+    return seg_path, part_h5ad
 
 
 def discover_jobs(cfg: Config) -> list[PreprocessJob]:
-    """Discover concrete preprocessing work items from completed mcmicro outputs."""
+    """Discover concrete preprocessing work items from the consolidated images."""
+    consolidate_images(cfg)  # idempotent: hardlink mcmicro outputs into results/<exp>/images
     jobs: list[PreprocessJob] = []
     missing: list[str] = []
     for bg in cfg.bg_modes():
@@ -382,8 +402,8 @@ def discover_jobs(cfg: Config) -> list[PreprocessJob]:
             continue
 
         for img_path in images:
-            roi_name = roi_name_from_mcmicro_stem(img_path.stem)
-            part_zarr, part_h5ad = _part_paths(cfg, bg, roi_name)
+            roi_name = roi_name_from_results_stem(img_path.stem)
+            seg_path, part_h5ad = _part_paths(cfg, bg, roi_name)
             jobs.append(
                 PreprocessJob(
                     job_id=len(jobs) + 1,
@@ -391,7 +411,7 @@ def discover_jobs(cfg: Config) -> list[PreprocessJob]:
                     variant=_variant_label(bg),
                     roi_name=roi_name,
                     image_path=img_path,
-                    part_zarr=part_zarr,
+                    seg_path=seg_path,
                     part_h5ad=part_h5ad,
                 )
             )
@@ -413,7 +433,7 @@ def write_jobs_csv(cfg: Config, jobs: list[PreprocessJob]) -> Path:
     with path.open("w", newline="") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=["job_id", "bg", "variant", "roi_name", "image_path", "part_zarr", "part_h5ad"],
+            fieldnames=["job_id", "bg", "variant", "roi_name", "image_path", "seg_path", "part_h5ad"],
             lineterminator="\n",
         )
         w.writeheader()
@@ -425,7 +445,7 @@ def write_jobs_csv(cfg: Config, jobs: list[PreprocessJob]) -> Path:
                     "variant": job.variant,
                     "roi_name": job.roi_name,
                     "image_path": str(job.image_path),
-                    "part_zarr": str(job.part_zarr),
+                    "seg_path": str(job.seg_path),
                     "part_h5ad": str(job.part_h5ad),
                 }
             )
@@ -445,7 +465,7 @@ def read_jobs_csv(path: Path) -> list[PreprocessJob]:
                 variant=row["variant"],
                 roi_name=row["roi_name"],
                 image_path=Path(row["image_path"]),
-                part_zarr=Path(row["part_zarr"]),
+                seg_path=Path(row["seg_path"]),
                 part_h5ad=Path(row["part_h5ad"]),
             )
         )
@@ -459,28 +479,39 @@ def read_job_for_task(jobs_csv: Path, task_id: int) -> PreprocessJob:
     raise RuntimeError(f"No row for task_id={task_id} in {jobs_csv}")
 
 
-def _write_sdata_atomic(sdata, dest: Path) -> None:
-    """Write a SpatialData Zarr store to ``dest``, safely replacing any existing store.
+def _write_segmentation_parquet(sdata, roi_key: str, roi_label: str, dest: Path) -> None:
+    """Persist one ROI's cell-segmentation polygons as GeoParquet.
 
-    spatialdata>=0.7 refuses to overwrite a Zarr store when the object has
-    Dask-backed elements under the target path (scverse/spatialdata#520), so
-    ``overwrite=True`` is not reliable. Write to a sibling temp store first, then
-    swap it in: delete the old store and rename temp -> dest. The temp path
-    shares ``dest``'s parent to keep the rename on a single filesystem.
+    Read from ``sdata.shapes`` *after* ``sopa.aggregate`` so the rows are the
+    surviving cells, index-aligned to the cell table by ``cell_id``. Adds
+    ``cell_id``/``ROI``/``centroid_x``/``centroid_y``/``area`` so the file is
+    self-contained for external tools (napari/QuPath/spatial stats). Written
+    atomically (temp -> os.replace).
     """
-    dest = Path(dest)
+    shapes = sdata.shapes.get(f"{roi_key}_segmentation") if hasattr(sdata, "shapes") else None
+    if shapes is None:
+        log.warning("no segmentation shapes for ROI %s; skipping parquet", roi_key)
+        return
+    if hasattr(shapes, "compute"):
+        shapes = shapes.compute()
+    gdf = shapes.copy()
+    gdf["cell_id"] = gdf.index.astype(str)
+    gdf["ROI"] = roi_label
+    centroids = gdf.geometry.centroid
+    gdf["centroid_x"] = centroids.x.to_numpy()
+    gdf["centroid_y"] = centroids.y.to_numpy()
+    gdf["area"] = gdf.geometry.area.to_numpy()
+    gdf = gdf.reset_index(drop=True)
+
     ensure_dir(dest.parent)
-    tmp = dest.parent / (dest.name + ".tmp")
-    if tmp.exists():
-        shutil.rmtree(tmp)
-    sdata.write(str(tmp))
-    if dest.exists():
-        shutil.rmtree(dest)
-    tmp.rename(dest)
+    tmp = dest.with_name(dest.name + ".tmp")
+    gdf.to_parquet(tmp)
+    os.replace(tmp, dest)
+    log.info("segmentation parquet -> [path]%s[/] ([count]%d[/] cells)", dest, len(gdf))
 
 
 def process_job(cfg: Config, job: PreprocessJob) -> tuple[Path, Path]:
-    """Run one ROI/variant worker and write intermediate part outputs."""
+    """Run one ROI/variant worker: write the segmentation parquet + a cell-table part."""
     log.info(
         "preprocess worker: job=[count]%d[/] variant=[stage]%s[/] roi=[stage]%s[/] image=[path]%s[/]",
         job.job_id,
@@ -492,46 +523,25 @@ def process_job(cfg: Config, job: PreprocessJob) -> tuple[Path, Path]:
     sdata = _build_spatialdata_for_images(cfg, [job.image_path], channel_info)
     _segment_spatialdata(cfg, sdata)
 
-    ensure_dir(job.part_zarr.parent)
-    log.info("writing ROI SpatialData part -> [path]%s[/]", job.part_zarr)
-    _write_sdata_atomic(sdata, job.part_zarr)
+    roi_label = _roi_label_from_mcmicro_name(job.roi_name)
+    _write_segmentation_parquet(sdata, job.roi_name, roi_label, job.seg_path)
 
-    roi_labels = {job.roi_name: _roi_label_from_mcmicro_name(job.roi_name)}
-    adata = _adata_from_sdata_tables(sdata, roi_labels)
+    adata = _adata_from_sdata_tables(sdata, {job.roi_name: roi_label})
     ensure_dir(job.part_h5ad.parent)
-    log.info("writing ROI AnnData part -> [path]%s[/]", job.part_h5ad)
+    log.info("writing ROI cell-table part -> [path]%s[/]", job.part_h5ad)
     adata.write_h5ad(str(job.part_h5ad))
-    return job.part_zarr, job.part_h5ad
+    return job.seg_path, job.part_h5ad
 
 
 def run_worker(cfg: Config, jobs_csv: Path, task_id: int) -> tuple[Path, Path]:
     return process_job(cfg, read_job_for_task(jobs_csv, task_id))
 
 
-def _merge_spatialdata_parts(part_paths: list[Path]):
-    from spatialdata import SpatialData, read_zarr
-
-    merged: dict[str, dict] = {
-        "images": {},
-        "labels": {},
-        "points": {},
-        "shapes": {},
-        "tables": {},
-    }
-    for part_path in part_paths:
-        sdata = read_zarr(str(part_path))
-        for attr, dest in merged.items():
-            src = getattr(sdata, attr, None)
-            if src:
-                dest.update(dict(src))
-    return SpatialData(**{k: v for k, v in merged.items() if v})
-
-
 def _validate_parts(jobs: list[PreprocessJob]) -> None:
     missing = []
     for job in jobs:
-        if not job.part_zarr.exists():
-            missing.append(str(job.part_zarr))
+        if not job.seg_path.is_file():
+            missing.append(str(job.seg_path))
         if not job.part_h5ad.is_file():
             missing.append(str(job.part_h5ad))
     if missing:
@@ -540,22 +550,27 @@ def _validate_parts(jobs: list[PreprocessJob]) -> None:
         raise FileNotFoundError(f"Missing preprocess part output(s):\n{preview}{extra}")
 
 
-def merge_preprocess_parts(cfg: Config, jobs_csv: Path) -> list[tuple[Path, Path]]:
-    """Merge per-ROI worker outputs into final per-variant zarr/h5ad files."""
+def merge_preprocess_parts(cfg: Config, jobs_csv: Path) -> list[Path]:
+    """Concatenate per-ROI cell-table parts into the final per-variant cells h5ad.
+
+    The segmentation parquets are already written to their final location by the
+    workers, so the merge only assembles ``cells/<exp>_cells{suffix}.h5ad`` and
+    then deletes the transient per-ROI h5ad parts. Returns the h5ad paths.
+    """
     import anndata as ad
 
     jobs = read_jobs_csv(jobs_csv)
     if not jobs:
         raise RuntimeError(f"No preprocess jobs found in {jobs_csv}")
 
-    outputs: list[tuple[Path, Path]] = []
+    outputs: list[Path] = []
     grouped: dict[bool, list[PreprocessJob]] = {}
     for job in jobs:
         grouped.setdefault(job.bg, []).append(job)
 
     for bg, bg_jobs in grouped.items():
         label = _variant_label(bg)
-        log.info("merging preprocess parts for [stage]%s[/] ([count]%d[/] ROI jobs)", label, len(bg_jobs))
+        log.info("merging cell-table parts for [stage]%s[/] ([count]%d[/] ROI jobs)", label, len(bg_jobs))
         _validate_parts(bg_jobs)
 
         adatas = [ad.read_h5ad(job.part_h5ad) for job in bg_jobs]
@@ -568,13 +583,12 @@ def merge_preprocess_parts(cfg: Config, jobs_csv: Path) -> list[tuple[Path, Path
         log.info("writing merged AnnData -> [path]%s[/]", h5ad_path)
         adata.write_h5ad(str(h5ad_path))
 
-        sdata = _merge_spatialdata_parts([job.part_zarr for job in bg_jobs])
-        zarr_path = cfg.zarr_path(bg)
-        ensure_dir(zarr_path.parent)
-        log.info("writing merged SpatialData -> [path]%s[/]", zarr_path)
-        _write_sdata_atomic(sdata, zarr_path)
+        # Segmentation parquets are already final; drop the transient h5ad parts.
+        parts_dir = cfg.preprocess_parts_path(bg)
+        shutil.rmtree(parts_dir, ignore_errors=True)
+        log.info("removed transient cell-table parts -> [path]%s[/]", parts_dir)
 
-        outputs.append((zarr_path, h5ad_path))
+        outputs.append(h5ad_path)
 
     return outputs
 

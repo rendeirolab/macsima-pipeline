@@ -44,8 +44,12 @@ def write_jobs_csv(cfg: Config, samples: list[Path]) -> Path:
 def _body_cmd(cfg: Config) -> str:
     nxf_config = cfg.mcmicro.nextflow_config
     jobs_csv = cfg.jobs_csv("mcmicro")
+    work_dir = cfg.paths.work_dir.resolve()
     nxf_config_flag = f"-c {shlex.quote(str(nxf_config))} " if nxf_config else ""
-    return rf"""jobs_file={shlex.quote(str(jobs_csv))}
+    nxf_work = shlex.quote(str(work_dir / "work"))
+    cd = f"cd {shlex.quote(str(work_dir))}"
+    return rf"""{cd}
+jobs_file={shlex.quote(str(jobs_csv))}
 job_line=$(awk -F',' -v task_id="$SLURM_ARRAY_TASK_ID" 'NR > 1 && $1 == task_id {{print; exit}}' "$jobs_file")
 if [ -z "$job_line" ]; then
     echo "Error: no row for SLURM_ARRAY_TASK_ID=${{SLURM_ARRAY_TASK_ID}} in $jobs_file" >&2
@@ -60,10 +64,16 @@ echo "sample_path: $sample_path"
 echo "params:      $params_file"
 echo "=========================================="
 
+# publish_dir_mode=link publishes mcmicro's OME-TIFFs as HARDLINKS from the task
+# work/ dir (one inode, zero duplication); -work-dir pins work/ on the same
+# filesystem as the outputs — mode 'link' has no copy fallback, so they must share
+# a filesystem for the publish to succeed.
 nextflow {nxf_config_flag}run labsyspharm/mcmicro \
     -profile singularity \
+    -work-dir {nxf_work} \
     --in "$sample_path" \
-    --params "$params_file"
+    --params "$params_file" \
+    --publish_dir_mode link
 
 rc=$?
 echo "Finished $sample_name (rc=$rc)"

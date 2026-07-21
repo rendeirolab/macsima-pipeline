@@ -101,7 +101,7 @@ def plan(cfg: Config, config_path: Path) -> tuple[Path, Path, int]:
     """Generate the marker panel, discover ROIs, write jobs CSV, render sbatch."""
     from . import panel
 
-    # Marker panel + cell-type signature template BEFORE staging (sanity check + scaffold).
+    # Marker panel sanity check BEFORE staging (the signature template is scaffolded by the panel command).
     panel.generate(cfg)
 
     rois = discover_rois(cfg)

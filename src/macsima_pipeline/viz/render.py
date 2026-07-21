@@ -38,10 +38,10 @@ def _setup_mpl(cfg: Config) -> None:
 
 
 def resolve_roi(path: Path, cfg: Config) -> RoiImage:
-    from ..utils import roi_name_from_mcmicro_stem
+    from ..utils import roi_name_from_results_stem
 
     lvl = pick_level(path, cfg.viz.target_max_dim)
-    return RoiImage(name=roi_name_from_mcmicro_stem(path.stem), path=path, level=lvl)
+    return RoiImage(name=roi_name_from_results_stem(path.stem), path=path, level=lvl)
 
 
 def _grid_dims(n: int, ncols: int) -> tuple[int, int]:

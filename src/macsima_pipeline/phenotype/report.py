@@ -36,7 +36,7 @@ def write_phenotype_report(cfg, adata, bg: bool, results: dict, qc: dict, comp: 
     from matplotlib.backends.backend_pdf import PdfPages
 
     suffix = cfg.suffix_for(bg)
-    out_dir = cfg.figures_dir() / "phenotype"
+    out_dir = cfg.qc_dir() / "phenotype"
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{cfg.experiment.name}_phenotype_summary{suffix}.pdf"
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")

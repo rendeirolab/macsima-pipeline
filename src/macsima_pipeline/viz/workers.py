@@ -15,6 +15,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from ..config import Config
+from ..finalize import consolidate_images
 from . import cell_maps
 from . import channel_qc
 from . import render
@@ -24,11 +25,10 @@ log = logging.getLogger(__name__)
 
 
 def _collect_images(cfg: Config, bg: bool) -> list[Path]:
-    base = cfg.paths.work_dir / cfg.paths.mcmicro_out / cfg.experiment.name
-    pattern = cfg.mcmicro.background_pattern if bg else cfg.mcmicro.registration_pattern
-    images = sorted(base.rglob(pattern))
+    base = cfg.variant_images_dir(bg)
+    images = sorted(base.glob("*.ome.tif"))
     if not images:
-        raise FileNotFoundError(f"No images under {base} matching {pattern}")
+        raise FileNotFoundError(f"No consolidated images under {base}")
     return images
 
 
@@ -49,7 +49,7 @@ def _load_channel_info(cfg: Config, first_sample: Path, bg: bool) -> pd.DataFram
 
 
 def _percentile_cache_path(cfg: Config, bg: bool) -> Path:
-    return cfg.figures_dir() / "_cache" / f"percentiles{cfg.suffix_for(bg)}.parquet"
+    return cfg.qc_dir() / "_cache" / f"percentiles{cfg.suffix_for(bg)}.parquet"
 
 
 def _load_percentile_cache(cfg: Config, bg: bool) -> dict:
@@ -89,7 +89,7 @@ def _run_variant(cfg: Config, bg: bool) -> None:
     # ---- Pass 0: quantitative per-ROI/channel staining QC -----------------
     channel_qc.run_variant_qc(cfg, rois, channel_info, first_sample, bg)
 
-    figdir = cfg.figures_dir() / "rois"
+    figdir = cfg.qc_dir() / "rois"
     figdir.mkdir(parents=True, exist_ok=True)
     suffix = cfg.suffix_for(bg)
     fmt = cfg.viz.output_format
@@ -167,8 +167,7 @@ def _run_variant(cfg: Config, bg: bool) -> None:
         # page); fall back to the raw preprocess output for backward compatibility.
         phenotyped = cfg.phenotype_h5ad_path(bg)
         h5ad_path = phenotyped if phenotyped.is_file() else cfg.h5ad_path(bg)
-        qc_dir = cfg.figures_dir() / "qc"
-        out = qc_dir / f"{cfg.experiment.name}_mcmicro_cell_maps_summary{suffix}.pdf"
+        out = cfg.qc_dir() / f"{cfg.experiment.name}_mcmicro_cell_maps_summary{suffix}.pdf"
         if render.is_valid_output(out, "pdf"):
             log.info("skipping completed output: %s", out)
         elif not h5ad_path.is_file():
@@ -186,6 +185,7 @@ def _run_variant(cfg: Config, bg: bool) -> None:
 
 def run_inproc(cfg: Config) -> None:
     """Render figures for every configured background-subtraction variant."""
+    consolidate_images(cfg)  # idempotent: ensure results/<exp>/images is populated
     modes = cfg.bg_modes()
     log.info(
         "viz variants to run: %d (%s)",

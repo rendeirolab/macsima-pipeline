@@ -98,3 +98,24 @@ def test_sanity_check_requires_reference_each_cycle(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, raw)
     with pytest.raises(RuntimeError, match="reference marker"):
         panel.sanity_check(cfg, panel.scan_experiment(cfg))
+
+
+def test_generate_returns_frame_and_scaffolds_signature(tmp_path: Path) -> None:
+    from macsima_pipeline import scaffold
+    from macsima_pipeline.phenotype import signature as sig_mod
+
+    raw = tmp_path / "raw"
+    _make_raw(raw)
+    cfg = _cfg(tmp_path, raw)
+    df = panel.generate(cfg)  # returns the marker-panel summary frame
+    assert cfg.marker_panel_path().exists()
+    assert "marker_name" in df.columns
+
+    # the CLI unions marker_name across experiments, then scaffolds one shared signature
+    dest = tmp_path / "signature.yaml"
+    out = scaffold.write_signature_template("tx", list(dict.fromkeys(df["marker_name"])), dest)
+    assert out == dest
+    sig = sig_mod.load_signature(out)
+    assert {"T cell", "CD8 T cell"} <= set(sig.cell_type_names())  # CD3 / CD8 in the panel
+    # never clobbers a curated file
+    assert scaffold.write_signature_template("tx", ["DAPI"], dest) is None

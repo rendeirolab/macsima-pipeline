@@ -82,3 +82,12 @@ def roi_name_from_mcmicro_stem(stem: str) -> str:
     if len(parts) < 6:
         raise ValueError(f"Unexpected mcmicro filename stem: {stem!r}")
     return parts[5]
+
+
+def roi_name_from_results_stem(stem: str) -> str:
+    """Results-tree image stem IS the roi name (e.g. '003').
+
+    Consolidated images are named ``<roi>.ome.tif``; ``Path.stem`` strips only the
+    final ``.tif`` and leaves a trailing ``.ome``, so drop it here.
+    """
+    return stem[:-4] if stem.endswith(".ome") else stem

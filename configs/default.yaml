@@ -11,13 +11,14 @@ experiment:
 
 paths:
   work_dir: "."
-  staging_out: "mcmicro_output"
+  staging_out: "mcmicro_output"   # stage-1 staged tiles + mcmicro publish target (scratch)
   mcmicro_out: "mcmicro_output"
-  zarr_out: "artifacts/{experiment_name}/{experiment_name}_mcmicro{suffix}.zarr"
-  h5ad_out: "artifacts/{experiment_name}/{experiment_name}_cell_expression_mcmicro{suffix}.h5ad"
-  phenotype_h5ad_out: "artifacts/{experiment_name}/{experiment_name}_phenotyped_mcmicro{suffix}.h5ad"
-  preprocess_parts_dir: "artifacts/{experiment_name}/preprocess_parts{suffix}"
-  figures_dir: "figures/{experiment_name}"
+  # Single per-experiment deliverable root. Holds everything a user consumes:
+  #   results/<exp>/images/{registration,backsub}/<roi>.ome.tif   (hardlinks, 0 extra bytes)
+  #   results/<exp>/segmentation/*.parquet   cells/*.h5ad   qc/*   panel/marker_panel.csv
+  results_dir: "results/{experiment_name}"
+  cells_out: "{experiment_name}_cells{suffix}.h5ad"
+  phenotype_cells_out: "{experiment_name}_cells_phenotyped{suffix}.h5ad"
   jobs_dir: "jobs"
   logs_dir: "logs"
 
@@ -31,8 +32,8 @@ staging:
   cycle_glob: "*Cycle*"           # cycle folders per ROI; excludes the *Scan2 autofluorescence scan
 
 panel:
-  # Marker-panel sanity summary, generated before staging. (Cell-type signatures for
-  # phenotyping are produced by the phenotype stage / gen-signature, not here.)
+  # Marker-panel sanity summary, generated before staging. (The `panel` command also
+  # scaffolds the phenotyping signature.yaml next to the config — curate it before submit.)
   marker_panel_csv: "marker_panel.csv"
 
 mcmicro:

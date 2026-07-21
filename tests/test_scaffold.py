@@ -1,10 +1,8 @@
-"""Scaffold utility tests: gen_roi_metadata (pre-staging) + gen_markers (post-staging)."""
+"""Scaffold utility tests: gen_roi_metadata (pre-staging) + write_signature_template."""
 
 from __future__ import annotations
 
 from pathlib import Path
-
-import pandas as pd
 
 from macsima_pipeline import scaffold
 from macsima_pipeline.config import Config
@@ -85,94 +83,35 @@ def test_roi_metadata_missing_raw_root_returns_none(tmp_path: Path) -> None:
     assert scaffold.gen_roi_metadata(cfg, config_path=tmp_path / "config.yaml") is None
 
 
-# ---- gen_markers -----------------------------------------------------------
-
-MARKERS = """\
-channel_number,cycle_number,marker_name,Filter,background,exposure,remove
-1,1,bg_001_DAPI,DAPI,,633.6,TRUE
-2,1,DAPI,DAPI,,1207.5,
-3,1,CD31,FITC,bg_001,633.6,
-"""
+# ---- write_signature_template ----------------------------------------------
 
 
-def _make_staged(tmp_path: Path, markers: str = MARKERS) -> None:
-    sample = tmp_path / "mcmicro_output" / "texp" / "rack-01-well-C01-roi-003-exp-2"
-    (sample / "registration").mkdir(parents=True)
-    (sample / "registration" / "img-exp-2.ome.tif").write_bytes(b"")
-    (sample / "markers.csv").write_text(markers)
-
-
-def test_markers_normalizes_remove_and_keeps_all_rows(tmp_path: Path) -> None:
-    _make_staged(tmp_path)
-    cfg = _cfg(tmp_path, tmp_path / "raw")
-    out = scaffold.gen_markers(cfg, config_path=tmp_path / "config.yaml")
-    assert out == tmp_path / "markers_texp.csv"
-    df = pd.read_csv(out)
-    assert len(df) == 3  # bg_* row retained (channel_index alignment)
-    assert df["remove"].tolist() == [True, False, False]
-    assert list(df.columns) == [
-        "channel_number", "cycle_number", "marker_name", "Filter", "background", "exposure", "remove",
-    ]
-
-
-def test_markers_no_staged_output_returns_none(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, tmp_path / "raw")  # nothing staged
-    assert scaffold.gen_markers(cfg, config_path=tmp_path / "config.yaml") is None
-
-
-def test_markers_refuses_overwrite_without_force(tmp_path: Path) -> None:
-    _make_staged(tmp_path)
-    cfg = _cfg(tmp_path, tmp_path / "raw")
-    dest = tmp_path / "markers_texp.csv"
-    dest.write_text("KEEP\n")
-    assert scaffold.gen_markers(cfg, config_path=tmp_path / "config.yaml") is None
-    assert dest.read_text() == "KEEP\n"
-    out = scaffold.gen_markers(cfg, config_path=tmp_path / "config.yaml", force=True)
+def test_write_signature_template_builds_loadable(tmp_path: Path) -> None:
+    markers = ["DAPI", "CD3", "CD45", "CD8", "CD4", "CD19", "CD20", "PanCK"]
+    dest = tmp_path / "signature.yaml"
+    out = scaffold.write_signature_template("tx", markers, dest)
     assert out == dest
-
-
-# ---- gen_signature ---------------------------------------------------------
-
-SIG_MARKERS = """\
-channel_number,marker_name,remove
-1,bg_001_DAPI,TRUE
-2,DAPI,
-3,CD3,
-4,CD45,
-5,CD8,
-6,CD4,
-7,CD19,
-8,CD20,
-9,PanCK,
-"""
-
-
-def test_gen_signature_builds_loadable_template(tmp_path: Path) -> None:
-    _make_staged(tmp_path, markers=SIG_MARKERS)
-    cfg = _cfg(tmp_path, tmp_path / "raw")
-    out = scaffold.gen_signature(cfg, config_path=tmp_path / "config.yaml")
-    assert out == tmp_path / "signature_texp.yaml"
 
     from macsima_pipeline.phenotype import signature as sig_mod
 
     sig = sig_mod.load_signature(out)
     names = set(sig.cell_type_names())
     assert {"T cell", "CD4 T cell", "CD8 T cell", "B cell", "Epithelial"} <= names
-    assert list(sig.cell_types["T cell"].positive) == ["CD3", "CD45"]
-    # bg_* / removed markers excluded from the panel; usable markers appear in the header
+    assert list(sig.cell_types["T cell"].positive) == ["CD3", "CD45"]  # CD3e absent from panel
     txt = out.read_text()
-    assert "PanCK" in txt and "bg_001_DAPI" not in txt and "version: 1" in txt
+    assert "PanCK" in txt and "version: 1" in txt
 
 
-def test_gen_signature_no_staged_returns_none(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, tmp_path / "raw")
-    assert scaffold.gen_signature(cfg, config_path=tmp_path / "config.yaml") is None
+def test_write_signature_template_empty_markers_returns_none(tmp_path: Path) -> None:
+    assert scaffold.write_signature_template("tx", [], tmp_path / "signature.yaml") is None
 
 
-def test_gen_signature_refuses_overwrite(tmp_path: Path) -> None:
-    _make_staged(tmp_path, markers=SIG_MARKERS)
-    cfg = _cfg(tmp_path, tmp_path / "raw")
-    dest = tmp_path / "signature_texp.yaml"
+def test_write_signature_template_skips_existing_unless_force(tmp_path: Path) -> None:
+    markers = ["DAPI", "CD3", "CD45"]
+    dest = tmp_path / "signature.yaml"
     dest.write_text("KEEP\n")
-    assert scaffold.gen_signature(cfg, config_path=tmp_path / "config.yaml") is None
-    assert dest.read_text() == "KEEP\n"
+    assert scaffold.write_signature_template("tx", markers, dest) is None
+    assert dest.read_text() == "KEEP\n"  # curated edits never clobbered
+    out = scaffold.write_signature_template("tx", markers, dest, force=True)
+    assert out == dest
+    assert "version: 1" in dest.read_text()

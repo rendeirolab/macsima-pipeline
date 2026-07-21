@@ -48,10 +48,15 @@ experiment:
     assert isinstance(cfg, Config)
     assert cfg.experiment.name == "expt99"
     assert cfg.suffix == "_no_bs"
-    assert str(cfg.zarr_path()).endswith("expt99_mcmicro_no_bs.zarr")
-    assert str(cfg.h5ad_path()).endswith("expt99_cell_expression_mcmicro_no_bs.h5ad")
-    assert str(cfg.preprocess_parts_path()).endswith("artifacts/expt99/preprocess_parts_no_bs")
-    assert str(cfg.figures_dir()).endswith("figures/expt99")
+    assert str(cfg.h5ad_path()).endswith("results/expt99/cells/expt99_cells_no_bs.h5ad")
+    assert str(cfg.preprocess_parts_path()).endswith("results/expt99/cells/_parts_no_bs")
+    assert str(cfg.qc_dir()).endswith("results/expt99/qc")
+    assert str(cfg.images_dir()).endswith("results/expt99/images")
+    assert str(cfg.variant_images_dir(False)).endswith("results/expt99/images/registration")
+    assert str(cfg.variant_images_dir(True)).endswith("results/expt99/images/backsub")
+    assert str(cfg.segmentation_dir()).endswith("results/expt99/segmentation")
+    assert str(cfg.marker_panel_path()).endswith("results/expt99/panel/marker_panel.csv")
+    assert not hasattr(cfg, "zarr_path")
     assert cfg.jobs_csv("staging").name == "staging_expt99.csv"
     assert cfg.sbatch_path("mcmicro").name == "mcmicro_expt99.sbatch"
     assert cfg.preprocess.parallel.max_workers == 4
@@ -79,7 +84,9 @@ experiment:
     # phenotype SLURM stage falls back to the GPU preprocess stage when unset
     assert cfg.slurm.stage("phenotype").gres == "gpu:1"
     assert cfg.slurm.stage("phenotype").partition == "gpu"
-    assert str(cfg.phenotype_h5ad_path()).endswith("expt99_phenotyped_mcmicro_no_bs.h5ad")
+    assert str(cfg.phenotype_h5ad_path()).endswith(
+        "results/expt99/cells/expt99_cells_phenotyped_no_bs.h5ad"
+    )
 
 
 def test_suffix_with_background_subtraction(tmp_path: Path) -> None:
@@ -97,7 +104,7 @@ mcmicro:
     )
     cfg = load_config(tmp_path / "exp.yaml")
     assert cfg.suffix == ""
-    assert str(cfg.zarr_path()).endswith("bs_run_mcmicro.zarr")
+    assert str(cfg.h5ad_path()).endswith("results/bs_run/cells/bs_run_cells.h5ad")
 
 
 def test_missing_required_field_raises(tmp_path: Path) -> None:

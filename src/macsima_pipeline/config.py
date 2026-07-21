@@ -10,6 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .utils import ensure_dir
 
+# Subdir under results/<exp>/images/ per background-subtraction variant.
+# Shared by the finalize (image consolidation) step and every downstream reader
+# so the on-disk contract has a single source of truth.
+IMAGE_VARIANT_SUBDIR: dict[bool, str] = {True: "backsub", False: "registration"}
+
 
 # ---------- Sub-models -------------------------------------------------------
 
@@ -29,11 +34,12 @@ class PathsCfg(BaseModel):
     work_dir: Path = Path(".")
     staging_out: Path = Path("mcmicro_output")
     mcmicro_out: Path = Path("mcmicro_output")
-    zarr_out: str = "{experiment_name}_mcmicro{suffix}.zarr"
-    h5ad_out: str = "{experiment_name}_cell_expression_mcmicro{suffix}.h5ad"
-    phenotype_h5ad_out: str = "{experiment_name}_phenotyped_mcmicro{suffix}.h5ad"
-    preprocess_parts_dir: str = "artifacts/{experiment_name}/preprocess_parts{suffix}"
-    figures_dir: str = "figures/{experiment_name}"
+    # Single per-experiment deliverable root. Everything a user consumes lives
+    # under here (images/, segmentation/, cells/, qc/, panel/); scratch/state
+    # (mcmicro_output/, work/, jobs/, logs/) stays outside it.
+    results_dir: str = "results/{experiment_name}"
+    cells_out: str = "{experiment_name}_cells{suffix}.h5ad"
+    phenotype_cells_out: str = "{experiment_name}_cells_phenotyped{suffix}.h5ad"
     jobs_dir: Path = Path("jobs")
     logs_dir: Path = Path("logs")
 
@@ -351,18 +357,17 @@ class Config(BaseModel):
         """Which background-subtraction variants to run.
 
         - bool -> single-element list with that bool.
-        - "auto" -> probe the staged mcmicro outputs and return [True, False],
+        - "auto" -> probe the consolidated results images and return [True, False],
           [True], or [False] depending on which image sets exist. If neither
-          exists yet (e.g. dry-run before mcmicro has produced output), assume
-          both variants will be produced -> [True, False].
+          exists yet (e.g. dry-run before images are consolidated), assume both
+          variants will be produced -> [True, False].
         """
         bg = self.mcmicro.background_subtraction
         if isinstance(bg, bool):
             return [bg]
-        base = self.paths.work_dir / self.paths.mcmicro_out / self.experiment.name
-        has_bs = bool(list(base.rglob(self.mcmicro.background_pattern))) if base.exists() else False
-        has_reg = bool(list(base.rglob(self.mcmicro.registration_pattern))) if base.exists() else False
-        if not base.exists() or (not has_bs and not has_reg):
+        has_bs = bool(list(self.variant_images_dir(True).glob("*.ome.tif")))
+        has_reg = bool(list(self.variant_images_dir(False).glob("*.ome.tif")))
+        if not has_bs and not has_reg:
             return [True, False]
         modes: list[bool] = []
         if has_bs:
@@ -379,31 +384,52 @@ class Config(BaseModel):
         """Expand `{experiment_name}` / `{suffix}` placeholders for a given variant."""
         return template.format(**self._ctx(bg))
 
-    def zarr_path(self, bg: bool | None = None) -> Path:
-        return self.paths.work_dir / self.resolve(self.paths.zarr_out, bg)
+    # ---- unified results tree: results/<exp>/{images,segmentation,cells,qc,panel} ----
+
+    def results_dir(self) -> Path:
+        """Single per-experiment deliverable root."""
+        return self.paths.work_dir / self.resolve(self.paths.results_dir)
+
+    def images_dir(self) -> Path:
+        """Processed OME-TIFFs, one ROI each: images/{registration,backsub}/<roi>.ome.tif."""
+        return self.results_dir() / "images"
+
+    def variant_images_dir(self, bg: bool) -> Path:
+        """Image subdir for one bg-sub variant (backsub/ or registration/)."""
+        return self.images_dir() / IMAGE_VARIANT_SUBDIR[bg]
+
+    def segmentation_dir(self) -> Path:
+        """Per-ROI cell segmentation parquet."""
+        return self.results_dir() / "segmentation"
+
+    def cells_dir(self) -> Path:
+        """Single-cell matrices (h5ad) + transient merge parts."""
+        return self.results_dir() / "cells"
+
+    def qc_dir(self) -> Path:
+        """QC + visualization outputs (PDF/CSV/parquet cache)."""
+        return self.results_dir() / "qc"
+
+    def panel_dir(self) -> Path:
+        """Marker panel + related pre-staging artifacts."""
+        return self.results_dir() / "panel"
 
     def h5ad_path(self, bg: bool | None = None) -> Path:
-        return self.paths.work_dir / self.resolve(self.paths.h5ad_out, bg)
+        return self.cells_dir() / self.resolve(self.paths.cells_out, bg)
 
     def phenotype_h5ad_path(self, bg: bool | None = None) -> Path:
-        return self.paths.work_dir / self.resolve(self.paths.phenotype_h5ad_out, bg)
+        return self.cells_dir() / self.resolve(self.paths.phenotype_cells_out, bg)
 
     def preprocess_parts_path(self, bg: bool | None = None) -> Path:
-        return self.paths.work_dir / self.resolve(self.paths.preprocess_parts_dir, bg)
-
-    def figures_dir(self) -> Path:
-        return self.paths.work_dir / self.resolve(self.paths.figures_dir)
+        """Transient per-ROI h5ad parts; deleted by the merge step."""
+        return self.cells_dir() / f"_parts{self.suffix_for(bg)}"
 
     def staging_root(self) -> Path:
         """Experiment-level staged-output dir: mcmicro_output/<exp> (holds the sample subdirs)."""
         return self.paths.work_dir / self.paths.staging_out / self.experiment.name
 
-    def artifacts_dir(self) -> Path:
-        """Per-experiment artifacts dir (marker panel, cell-type template, zarr/h5ad)."""
-        return self.paths.work_dir / "artifacts" / self.experiment.name
-
     def marker_panel_path(self) -> Path:
-        return self.artifacts_dir() / self.panel.marker_panel_csv
+        return self.panel_dir() / self.panel.marker_panel_csv
 
     def jobs_csv(self, stage: str) -> Path:
         return self.paths.work_dir / self.paths.jobs_dir / f"{stage}_{self.experiment.name}.csv"
