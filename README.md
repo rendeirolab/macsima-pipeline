@@ -174,19 +174,23 @@ to overwrite an existing file unless you pass `--force`.
 
 ### 4.3b (Optional) Phenotype signature
 
-The phenotype stage (scyan + Leiden) needs a **signature matrix**, a marker-to-cell-type
-table (`phenotype.signature_matrix`). If it is unset, the phenotype stage skips (the chain
-still runs). The pre-staging `panel` command scaffolds one shared `signature.yaml` next to
-your config (union of markers across the config's experiments):
+The phenotype stage (scyan + Leiden) needs a **signature matrix**: a scyan-native CSV
+where rows are cell-type populations, columns are markers, and each value is the expected
+relative expression in `[-1, 1]` (blank = unknown). scyan reads the values directly, so a
+graded `0.5` is a weaker prior than `1`; Leiden uses only their sign. A reserved `parent`
+column sets the coarse label (`cell_type_coarse`). If `phenotype.signature_matrix` is unset,
+the phenotype stage skips (the chain still runs). The pre-staging `panel` command scaffolds
+one shared `signature.csv` next to your config (union of markers across the config's
+experiments):
 
 ```bash
 uv run macsima-pipeline panel --config experiments/myexp/config.yaml
-# → wrote signature.yaml (panel markers listed + example cell types to edit)
+# → wrote signature.csv (population×marker template with example rows to edit)
 ```
 
-Fill in `positive`/`negative` markers per cell type, then set
-`phenotype.signature_matrix` to that path. `panel` won't overwrite your edits (pass
-`--force` to regenerate). See `configs/signature_example.yaml`.
+Edit the values per population, then point `phenotype.signature_matrix` at the file. `#`
+comment lines are allowed (keep your notes there). `panel` won't overwrite your edits (pass
+`--force` to regenerate). See `configs/signature_example.csv`.
 
 ### 4.4 Dry-run each stage
 
@@ -322,7 +326,7 @@ From the raw filenames alone (fast, no pixel reads) writes `results/<exp>/panel/
 (a per-cycle panel summary, so you can sanity-check that the run acquired what you expect) and validates the
 panel: reference marker present in every cycle, consistent markers across ROIs, background
 acquisitions present. `stage` runs the marker-panel check at plan time; the standalone
-`macsima-pipeline panel --config …` command also scaffolds a shared `signature.yaml`
+`macsima-pipeline panel --config …` command also scaffolds a shared `signature.csv`
 (phenotyping cell-type template) next to the config for you to curate before submitting.
 
 ### Stage 1: `stage`
@@ -385,9 +389,9 @@ runs locally. Skips gracefully (exit 0, chain still proceeds) when disabled or w
 
 Writes `obs['cell_type', 'cell_type_coarse', 'cell_type_confidence', 'scyan_celltype',
 'leiden', 'leiden_celltype', 'pheno_agree']`, `obsm['spatial']`, `uns['phenotype']`, and a
-QC PDF under `results/{exp}/qc/phenotype/`. The **signature matrix** is a small YAML that names the
-expected positive and negative markers for each cell type, with an optional lineage `parent`. Point
-`phenotype.signature_matrix` at it.
+QC PDF under `results/{exp}/qc/phenotype/`. The **signature matrix** is a scyan-native CSV
+(populations × markers, values in `[-1, 1]`; blank = unknown) with a reserved `parent` column for
+the coarse label. Point `phenotype.signature_matrix` at it.
 
 ### Stage 5: `viz`
 
@@ -424,7 +428,7 @@ See `configs/default.yaml` for every key with inline comments. Selected keys:
 | `preprocess.segmentation` | `model`, `channels`, `min_area`, `gpu` | Cellpose4 params |
 | `preprocess.patches` | `patch_width` | Sopa patch size for segmentation; lower this if CUDA memory is tight |
 | `preprocess.parallel.max_workers` | worker array throttle | maximum concurrent preprocessing workers |
-| `phenotype` | `signature_matrix` | path to the signature YAML; `null` → stage skips (chain still runs) |
+| `phenotype` | `signature_matrix` | path to the signature CSV (populations × markers, `[-1,1]`/blank, reserved `parent` column); `null` → stage skips |
 | `phenotype` | `engines`, `primary_engine` | which engines to run (`scyan`, `leiden`); which populates `cell_type` |
 | `phenotype.normalize` | `transform`, `cofactor`, `clip_percentile`, `zscore` | per-marker normalization (arcsinh; tune `cofactor` to your intensity scale) |
 | `phenotype.batch` | `method`, `batch_key` | intensity-stage batch handling (`zscore_per_roi` default) |
@@ -457,6 +461,29 @@ Defaults (override under `slurm.<stage>` in your config):
 | preprocess | gpu | 16 / 100G / 6h | `gpu:h100pcie:1` |
 | preprocess_merge | shortq | 8 / 100G / 4h | — |
 | viz | shortq | 8 / 100G / 4h | — |
+
+### 7.1 Staging inputs to fast local storage (RAM disk / node-local scratch)
+
+The `stage` and `preprocess` array tasks otherwise read large image data directly off the shared network filesystem on every task. Optionally, each task can first **copy its inputs once to a fast node-local filesystem** — a RAM disk (tmpfs, e.g. `/dev/shm`) or node-local SSD/scratch — turning many random / small-file network reads into one sequential copy plus fast local reads. `preprocess` stages the whole per-ROI mosaic; `stage` stages one cycle folder at a time.
+
+Enable it purely by setting a path — no code or cluster-specific wiring:
+
+```yaml
+preprocess:
+  stage_in:
+    dir: /dev/shm            # set a path to enable; null (default) = off
+    mem_charged: true        # RAM disk counts against --mem; set false for node-local disk
+    working_gb: 100          # process headroom added to --mem when mem_charged
+staging:
+  stage_in:
+    dir: "$SLURM_TMPDIR"     # env vars are expanded at runtime
+    mem_charged: false       # node-local disk: no --mem bump
+    working_gb: 32
+```
+
+- **`dir` set ⇒ enabled; `null` ⇒ disabled.** `$VARs` in the path are expanded per task. Nothing here is specific to any one cluster.
+- **Memory sizing is automatic.** When `mem_charged: true` (a RAM disk — tmpfs is charged against the SLURM `--mem` cgroup), the planner overrides `--mem` for that stage to `min(cap_gb, ceil(largest_input_GB × safety) + working_gb)`. For node-local disk set `mem_charged: false` and `--mem` is left as configured. Keep `working_gb` at the stage's normal `slurm.<stage>.mem`; lower it once you've seen actual `MaxRSS` (`sacct -j <id> --format=ReqMem,MaxRSS`).
+- **Safety.** If an input does not fit the memory/free-space budget, or the staging dir is missing, that task logs a warning and reads directly from the network (the run still succeeds). The staged copy is removed on exit; the sbatch template also carries a `trap` that clears it on a hard crash, so a leaked copy cannot OOM later jobs on the node.
 
 ---
 
@@ -503,6 +530,9 @@ Path is resolved relative to `paths.work_dir`. From the repo root, `experiments/
 
 **Preprocess OOM / OOT.**
 Bump `slurm.preprocess.mem` / `time` for CPU RAM or walltime issues. For CUDA OOM, lower `preprocess.patches.patch_width`, e.g. `1024` for large ROIs or smaller GPUs. The default is bounded at `2048` so Cellpose does not receive full ROIs at once. If the GPU is still too small, request a larger GPU in `slurm.preprocess.gres` or set `preprocess.segmentation.gpu: false` as a slower CPU fallback.
+
+**GPU idle / IO-bound (jobs slow, low GPU utilisation).**
+If tasks spend their time reading images off the shared filesystem rather than computing, enable input staging to node-local storage — see [7.1](#71-staging-inputs-to-fast-local-storage-ram-disk--node-local-scratch). When staging to a RAM disk (`mem_charged: true`), `--mem` is auto-sized to hold the staged input; if a job then OOMs on `/dev/shm`, either it exceeded `cap_gb` (raise it, if the node has the RAM) or point `dir` at node-local disk with `mem_charged: false`.
 
 **Viz resume.**
 Percentile cache is parquet under `results/<exp>/qc/_cache/`; deleting it forces re-computation. `viz.cache_percentiles: false` disables.

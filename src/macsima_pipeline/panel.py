@@ -1,11 +1,11 @@
 """Pre-staging marker panel sanity check.
 
 Runs *before* the (expensive) staging compute — it only parses raw filenames, so it is cheap
-enough to run at submit time on a login node. It writes ``artifacts/<exp>/marker_panel.csv``
+enough to run at submit time on a login node. It writes ``results/<exp>/panel/marker_panel.csv``
 (one row per cycle x marker x filter: which cycles, filters, exposures and how many ROIs carry
 each marker) and validates the acquired panel, so you can catch acquisition problems before
 committing compute. The `panel` CLI command additionally scaffolds a shared cell-type
-signature template (``signature.yaml``) next to the config for the user to curate.
+signature template (``signature.csv``) next to the config for the user to curate.
 """
 
 from __future__ import annotations

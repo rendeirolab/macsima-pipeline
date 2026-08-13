@@ -15,4 +15,9 @@
 
 set -euo pipefail
 
+{% if stage_in_dir %}
+# Second-layer cleanup: remove any stage-in copies this job left behind, even on a hard
+# crash (the Python worker removes them on the normal path). Job-scoped so it is unambiguous.
+trap 'rm -rf {{ stage_in_dir }}/macsima.$SLURM_JOB_ID.* 2>/dev/null || true' EXIT
+{% endif %}
 {{ body_cmd }}

@@ -23,7 +23,7 @@ def _cfg(tmp_path: Path, name: str) -> Config:
             "experiment": {"name": name, "raw_root": str(tmp_path / "raw")},
             "paths": {"work_dir": str(tmp_path)},
             "mcmicro": {"params_yaml": "configs/mcmicro_params.yaml", "background_subtraction": False},
-            "phenotype": {"signature_matrix": "sig.yaml"},
+            "phenotype": {"signature_matrix": "sig.csv"},
             "slurm": {
                 "staging": {"partition": "t", "qos": "t", "cpus": 1, "mem": "1G", "time": "1:00:00"},
                 "mcmicro": {"partition": "t", "qos": "t", "cpus": 1, "mem": "1G", "time": "1:00:00"},

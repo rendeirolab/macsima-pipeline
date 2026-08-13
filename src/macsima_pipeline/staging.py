@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .config import Config
 from .slurm import render_sbatch, submit, write_sbatch
+from .stagein import plan_mem, staged_size
 from .utils import ensure_dir
 
 log = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ def stage_roi_inproc(cfg: Config, task_id: int) -> list[Path]:
         hi_exposure_only=st.hi_exposure_only,
         out_subdir=st.output_subdir,
         remove_reference_marker=st.remove_reference_marker,
+        stage_in=st.stage_in,
     )
     log.info("[ok]staged[/] ROI [stage]%s[/]: [count]%d[/] sample dir(s)", roi_dir.name, len(samples))
     return samples
@@ -110,9 +112,40 @@ def plan(cfg: Config, config_path: Path) -> tuple[Path, Path, int]:
     csv_path = write_jobs_csv(cfg, rois)
     ensure_dir(cfg.staging_root())
     ensure_dir(cfg.paths.work_dir / cfg.paths.logs_dir)
-    content = render_sbatch(cfg, "staging", array_size=len(rois), body_cmd=_body_cmd(cfg, config_path))
+
+    si = cfg.staging.stage_in
+    stage_in_dir = str(si.dir) if si.dir is not None else None
+    mem_override = None
+    if si.dir is not None and si.mem_charged:
+        # Staging is per cycle folder, so --mem need only cover the largest single folder.
+        largest = _largest_cycle_bytes(rois, cfg.staging.cycle_glob)
+        mem_override = plan_mem([largest], working_gb=si.working_gb, safety=si.safety, cap_gb=si.cap_gb)
+        log.info("stage-in: staging --mem set to [count]%s[/] (largest cycle folder + headroom)", mem_override)
+
+    content = render_sbatch(
+        cfg,
+        "staging",
+        array_size=len(rois),
+        body_cmd=_body_cmd(cfg, config_path),
+        mem_override=mem_override,
+        stage_in_dir=stage_in_dir,
+    )
     sbatch = write_sbatch(cfg, "staging", content)
     return csv_path, sbatch, len(rois)
+
+
+def _largest_cycle_bytes(rois: list[Path], cycle_glob: str) -> int:
+    """Bytes of the largest single cycle folder — scans the first ROI as representative.
+
+    Staging copies one cycle folder at a time, so this bounds peak node-local usage.
+    Cycle folders are uniform across ROIs (same tile grid × channels), so the first ROI
+    is a fair proxy and avoids stat-ing every raw tile of the experiment at plan time.
+    """
+    for roi in rois:
+        cycles = sorted(p for p in roi.glob(cycle_glob) if p.is_dir())
+        if cycles:
+            return max(staged_size(c) for c in cycles)
+    return 0
 
 
 def run(

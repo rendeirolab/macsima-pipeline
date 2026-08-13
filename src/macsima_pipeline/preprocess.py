@@ -29,6 +29,7 @@ import pandas as pd
 from .config import Config
 from .finalize import consolidate_images
 from .slurm import render_sbatch, submit, write_sbatch
+from .stagein import plan_mem, staged, staged_size
 from .utils import ensure_dir, roi_name_from_results_stem
 
 log = logging.getLogger(__name__)
@@ -519,17 +520,20 @@ def process_job(cfg: Config, job: PreprocessJob) -> tuple[Path, Path]:
         job.roi_name,
         job.image_path,
     )
-    channel_info = _load_channel_info(cfg, [job.image_path], job.bg)
-    sdata = _build_spatialdata_for_images(cfg, [job.image_path], channel_info)
-    _segment_spatialdata(cfg, sdata)
+    # Stage the mosaic to fast local storage (if configured) for the whole read/segment
+    # pass — sopa reads all channels lazily via dask, so the file must stay put until done.
+    with staged(job.image_path, cfg.preprocess.stage_in) as img_path:
+        channel_info = _load_channel_info(cfg, [img_path], job.bg)
+        sdata = _build_spatialdata_for_images(cfg, [img_path], channel_info)
+        _segment_spatialdata(cfg, sdata)
 
-    roi_label = _roi_label_from_mcmicro_name(job.roi_name)
-    _write_segmentation_parquet(sdata, job.roi_name, roi_label, job.seg_path)
+        roi_label = _roi_label_from_mcmicro_name(job.roi_name)
+        _write_segmentation_parquet(sdata, job.roi_name, roi_label, job.seg_path)
 
-    adata = _adata_from_sdata_tables(sdata, {job.roi_name: roi_label})
-    ensure_dir(job.part_h5ad.parent)
-    log.info("writing ROI cell-table part -> [path]%s[/]", job.part_h5ad)
-    adata.write_h5ad(str(job.part_h5ad))
+        adata = _adata_from_sdata_tables(sdata, {job.roi_name: roi_label})
+        ensure_dir(job.part_h5ad.parent)
+        log.info("writing ROI cell-table part -> [path]%s[/]", job.part_h5ad)
+        adata.write_h5ad(str(job.part_h5ad))
     return job.seg_path, job.part_h5ad
 
 
@@ -629,7 +633,22 @@ def plan(cfg: Config, config_path: Path) -> PreprocessPlan:
     jobs_csv = jobs_csv.resolve()
 
     worker_body = f"cd {shlex.quote(str(work_dir))}\n{_worker_body_cmd(config_path, jobs_csv)}"
-    worker_content = render_sbatch(cfg, "preprocess", array_size=len(jobs), body_cmd=worker_body)
+    si = cfg.preprocess.stage_in
+    stage_in_dir = str(si.dir) if si.dir is not None else None
+    mem_override = None
+    if si.dir is not None and si.mem_charged:
+        # --mem must cover the largest staged mosaic (tmpfs counts against the cgroup).
+        sizes = [staged_size(j.image_path) for j in jobs]
+        mem_override = plan_mem(sizes, working_gb=si.working_gb, safety=si.safety, cap_gb=si.cap_gb)
+        log.info("stage-in: preprocess --mem set to [count]%s[/] (largest mosaic + headroom)", mem_override)
+    worker_content = render_sbatch(
+        cfg,
+        "preprocess",
+        array_size=len(jobs),
+        body_cmd=worker_body,
+        mem_override=mem_override,
+        stage_in_dir=stage_in_dir,
+    )
     worker_sbatch = write_sbatch(cfg, "preprocess", worker_content)
 
     merge_body = f"cd {shlex.quote(str(work_dir))}\n{_merge_body_cmd(config_path, jobs_csv)}"

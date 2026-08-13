@@ -1,18 +1,24 @@
 """Signature matrix: the marker -> cell-type prior that drives phenotyping.
 
-A small YAML artifact naming the expected positive (and optional negative) markers
-per cell type, with an optional lineage `parent`. This is the single knowledge input
-that replaces manually reading N markers across every cluster: both engines
-(scyan, Leiden) consume it, so their labels are directly comparable.
+A scyan-native CSV table. Rows are cell-type populations, columns are markers, and
+each value is the expected relative expression in ``[-1, 1]`` (blank / NA = unknown,
+i.e. not informative for that population). One reserved column, ``parent``, gives each
+population a coarse/lineage label used for ``cell_type_coarse``. Both engines (scyan,
+Leiden) consume this table, so their labels are directly comparable.
 
-Schema (``version: 1``)::
+``#`` comment lines are allowed anywhere (read with pandas ``comment="#"``), so a
+signature file can carry its own documentation.
 
-    version: 1
-    markers: [DAPI, CD3, CD8, ...]        # optional panel restriction; default = all listed
-    cell_types:
-      T cell:     {positive: [CD3, CD45], negative: [CD19, CD68], parent: Immune}
-      CD8 T cell: {positive: [CD3, CD8],  negative: [CD4],        parent: T cell}
-      B cell:     [CD19, CD20]            # positive-only shorthand also accepted
+Schema (CSV)::
+
+    # optional comments (panel, rationale, caveats ...)
+    population,parent,DAPI,CD3,CD45,CD8,...
+    T cell,Immune,,1,1,,...
+    CD8 T cell,T cell,,1,,1,...
+
+Values are numeric in ``[-1, 1]`` or blank/NA. scyan uses them directly as prior modes
+(NA is masked / "don't care"); Leiden uses only their sign (``> 0`` positive, ``< 0``
+negative). A graded value such as ``0.5`` is a valid, weaker prior than ``1``.
 """
 
 from __future__ import annotations
@@ -22,38 +28,28 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import yaml
+import pandas as pd
 
 log = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class CellTypeSig:
-    name: str
-    positive: tuple[str, ...]
-    negative: tuple[str, ...] = ()
-    parent: str | None = None
+# Reserved (non-marker) column naming each population's coarse/lineage label.
+PARENT_COLUMN = "parent"
 
 
 @dataclass(frozen=True)
 class SignatureMatrix:
-    version: int
-    cell_types: dict[str, CellTypeSig]
-    markers: tuple[str, ...] | None = None  # optional explicit panel restriction
+    """Population x marker prior table plus per-population coarse/lineage parents."""
+
+    table: pd.DataFrame  # index = populations, columns = markers, values in [-1, 1] or NaN
+    parents: dict[str, str | None]  # population -> coarse/lineage label (or None)
 
     # ---- accessors ----
 
     def cell_type_names(self) -> list[str]:
-        return list(self.cell_types.keys())
+        return [str(n) for n in self.table.index]
 
     def all_markers(self) -> list[str]:
-        """Every marker mentioned (positive or negative), first-seen order."""
-        out: list[str] = []
-        for ct in self.cell_types.values():
-            for m in (*ct.positive, *ct.negative):
-                if m not in out:
-                    out.append(m)
-        return out
+        return [str(m) for m in self.table.columns]
 
     # ---- validation ----
 
@@ -61,98 +57,94 @@ class SignatureMatrix:
         """Reconcile the signature with an actual marker panel.
 
         Warns on signature markers absent from the panel (they are dropped by the
-        engines). Raises if any cell type loses *all* of its positive markers.
-        Returns the usable marker list (panel markers referenced by the signature,
-        in panel order).
+        engines). Raises if any population has no informative (non-NaN) marker present
+        in the panel. Returns the usable marker list (signature markers present in the
+        panel, in panel order).
         """
         var_set = set(var_names)
-        missing = sorted({m for m in self.all_markers() if m not in var_set})
+        missing = sorted(m for m in self.all_markers() if m not in var_set)
         if missing:
             log.warning("signature markers absent from panel (dropped): %s", ", ".join(missing))
-        for name, ct in self.cell_types.items():
-            usable_pos = [m for m in ct.positive if m in var_set]
-            if ct.positive and not usable_pos:
-                raise ValueError(
-                    f"cell type {name!r} has no positive markers present in the panel "
-                    f"(needs one of: {', '.join(ct.positive)})"
-                )
-        referenced = set(self.all_markers())
-        return [m for m in var_names if m in referenced]
+        present = [m for m in self.all_markers() if m in var_set]
+        sub = self.table[present] if present else self.table.iloc[:, :0]
+        for name in self.table.index:
+            if present and sub.loc[name].notna().to_numpy().sum() > 0:
+                continue
+            raise ValueError(
+                f"population {name!r} has no informative markers present in the panel "
+                f"(signature markers: {', '.join(self.all_markers())})"
+            )
+        return [m for m in var_names if m in var_set & set(self.all_markers())]
 
     # ---- engine inputs ----
 
-    def to_marker_dict(self) -> dict[str, list[str]]:
-        """cell_type -> positive markers."""
-        return {name: list(ct.positive) for name, ct in self.cell_types.items()}
-
     def score_matrix(self, markers: list[str]) -> np.ndarray:
-        """(K, M) signed matrix aligned to `markers`: +1 positive, -1 negative, else 0.
+        """(K, M) prior matrix aligned to ``markers``: values in [-1, 1], NaN = unknown.
 
-        Drives the scyan knowledge table and Leiden cluster scoring.
+        Feeds the scyan knowledge table directly (values used as-is) and Leiden cluster
+        scoring (which uses only the sign). Markers absent from the signature are NaN.
+        Row order matches :meth:`cell_type_names`.
         """
-        idx = {m: i for i, m in enumerate(markers)}
-        mat = np.zeros((len(self.cell_types), len(markers)), dtype=np.float32)
-        for k, ct in enumerate(self.cell_types.values()):
-            for m in ct.positive:
-                if m in idx:
-                    mat[k, idx[m]] = 1.0
-            for m in ct.negative:
-                if m in idx:
-                    mat[k, idx[m]] = -1.0
-        return mat
+        return self.table.reindex(columns=markers).to_numpy(dtype=np.float64)
 
     def coarse_map(self) -> dict[str, str]:
-        """Map each leaf cell type to its root ancestor via the `parent` chain.
+        """Map each population to its root ancestor via the ``parent`` chain.
 
-        A `parent` that is not itself a defined cell type (a pure lineage label,
-        e.g. ``Immune``) terminates the walk and becomes the coarse label.
+        A ``parent`` that is not itself a defined population (a pure lineage label,
+        e.g. ``Immune``) terminates the walk and becomes the coarse label. A population
+        with no parent maps to itself.
         """
         out: dict[str, str] = {}
-        for name in self.cell_types:
+        for name in self.cell_type_names():
             cur = name
             seen: set[str] = set()
             while True:
-                ct = self.cell_types.get(cur)
-                if ct is None or ct.parent is None or cur in seen:
+                parent = self.parents.get(cur)
+                if not parent or cur in seen:
                     break
                 seen.add(cur)
-                cur = ct.parent
+                cur = parent
             out[name] = cur
         return out
 
 
-def _parse_cell_type(name: str, spec: object) -> CellTypeSig:
-    if isinstance(spec, list):  # positive-only shorthand
-        positive = [str(m) for m in spec]
-        negative: list[str] = []
-        parent: object = None
-    elif isinstance(spec, dict):
-        positive = [str(m) for m in (spec.get("positive") or [])]
-        negative = [str(m) for m in (spec.get("negative") or [])]
-        parent = spec.get("parent")
-    else:
-        raise ValueError(f"cell type {name!r} must be a list or mapping, got {type(spec).__name__}")
-    if not positive:
-        raise ValueError(f"cell type {name!r} has no positive markers")
-    return CellTypeSig(
-        name=name,
-        positive=tuple(positive),
-        negative=tuple(negative),
-        parent=str(parent) if parent else None,
-    )
-
-
 def load_signature(path: str | Path) -> SignatureMatrix:
-    """Load and validate a signature-matrix YAML."""
+    """Load and validate a scyan-native signature CSV (see module docstring)."""
     path = Path(path)
-    with path.open() as f:
-        data = yaml.safe_load(f) or {}
-    if not isinstance(data, dict):
-        raise ValueError(f"{path}: top-level must be a mapping")
-    raw_types = data.get("cell_types")
-    if not isinstance(raw_types, dict) or not raw_types:
-        raise ValueError(f"{path}: a non-empty 'cell_types' mapping is required")
-    cell_types = {str(name): _parse_cell_type(str(name), spec) for name, spec in raw_types.items()}
-    markers = data.get("markers")
-    markers_t = tuple(str(m) for m in markers) if markers else None
-    return SignatureMatrix(version=int(data.get("version", 1)), cell_types=cell_types, markers=markers_t)
+    df = pd.read_csv(path, index_col=0, comment="#", skipinitialspace=True)
+
+    # Clean the population index; drop fully-blank rows.
+    df.index = [str(n).strip() for n in df.index]
+    df = df[[bool(n) and n.lower() != "nan" for n in df.index]]
+    if df.empty:
+        raise ValueError(f"{path}: no populations found (need at least one data row)")
+    if df.index.duplicated().any():
+        dupes = sorted(df.index[df.index.duplicated()].unique())
+        raise ValueError(f"{path}: duplicate population name(s): {', '.join(dupes)}")
+
+    # Reserved parent column -> coarse/lineage mapping (case-insensitive header match).
+    parents: dict[str, str | None] = {name: None for name in df.index}
+    parent_cols = [c for c in df.columns if str(c).strip().lower() == PARENT_COLUMN]
+    if parent_cols:
+        raw = df.pop(parent_cols[0])
+        for name, val in raw.items():
+            s = "" if pd.isna(val) else str(val).strip()
+            parents[str(name)] = s or None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    if df.shape[1] == 0:
+        raise ValueError(f"{path}: no marker columns found")
+
+    # Coerce to float; validate range [-1, 1] or NaN.
+    try:
+        table = df.apply(pd.to_numeric).astype(np.float64)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"{path}: signature values must be numeric in [-1, 1] or blank ({e})") from e
+    vals = table.to_numpy()
+    finite = vals[~np.isnan(vals)]
+    if finite.size == 0:
+        raise ValueError(f"{path}: signature has no values (every entry is blank)")
+    if finite.min() < -1.0 or finite.max() > 1.0:
+        raise ValueError(f"{path}: signature values must lie in [-1, 1] (blank/NA = unknown)")
+
+    return SignatureMatrix(table=table, parents=parents)

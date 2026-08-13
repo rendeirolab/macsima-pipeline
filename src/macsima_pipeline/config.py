@@ -44,6 +44,24 @@ class PathsCfg(BaseModel):
     logs_dir: Path = Path("logs")
 
 
+class StageInCfg(BaseModel):
+    """Copy a task's inputs to fast node-local storage before processing (opt-in).
+
+    ``dir`` set  -> staging enabled; the target may be a RAM disk (tmpfs, e.g. ``/dev/shm``)
+    or node-local SSD/scratch, and may contain env vars (``$SLURM_TMPDIR``, ``$USER``).
+    ``dir`` None -> disabled (the default). Cluster-agnostic: no location is hardcoded.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    dir: Path | None = None
+    # tmpfs writes count against the SLURM --mem cgroup; node-local disk does not. When true,
+    # the planner bumps --mem by the staged size. Set false for node-local disk targets.
+    mem_charged: bool = True
+    working_gb: int = 64  # process working-set headroom added to --mem when mem_charged
+    safety: float = 1.15  # multiplier on the staged bytes when sizing --mem
+    cap_gb: int = 200  # hard ceiling on the computed --mem (guards against an outlier input)
+
+
 class StagingCfg(BaseModel):
     """Stage 1 (native staging) knobs. Replaces the old macsima2mc Docker/apptainer step."""
 
@@ -54,6 +72,8 @@ class StagingCfg(BaseModel):
     remove_reference_marker: bool = False  # mark DAPI remove=TRUE after the first cycle
     output_subdir: str = "raw"
     cycle_glob: str = "*Cycle*"  # cycle folders staged within each ROI (excludes *Scan2 AF)
+    # Stage each cycle folder via node-local storage (one folder at a time -> small mem bump).
+    stage_in: StageInCfg = Field(default_factory=lambda: StageInCfg(working_gb=32))
 
 
 class PanelCfg(BaseModel):
@@ -105,6 +125,8 @@ class PreprocessCfg(BaseModel):
     patches: PatchesCfg = PatchesCfg()
     parallel: PreprocessParallelCfg = PreprocessParallelCfg()
     scale_factors: list[int] = Field(default_factory=lambda: [2, 4])
+    # Stage the per-ROI mosaic via node-local storage before GPU segmentation.
+    stage_in: StageInCfg = Field(default_factory=lambda: StageInCfg(working_gb=100))
 
 
 class VizParallelCfg(BaseModel):
@@ -189,18 +211,39 @@ class PhenotypeBatchCfg(BaseModel):
     """Batch handling at the intensity stage (preserves marker interpretability)."""
 
     model_config = ConfigDict(extra="forbid")
-    method: Literal["none", "zscore_per_roi", "quantile_reference", "combat"] = "zscore_per_roi"
+    method: Literal["none", "zscore_per_roi", "quantile_reference", "combat", "harmony"] = "none"
     batch_key: str = "ROI"
     reference: str | None = None
     min_cells_per_batch: int = 50
+    # harmony (harmonypy >= 2.0, the Harmony2 algorithm). Correction runs directly in
+    # marker space so `X` stays interpretable and both engines keep working; harmony is
+    # normally applied to PCs, but it is a linear per-cluster correction, so a 59-marker
+    # matrix is a valid input space and is the usual choice for CyTOF/imaging panels.
+    harmony_theta: float | None = None  # diversity penalty; None -> harmonypy default (2)
+    harmony_sigma: float = 0.1
+    harmony_nclust: int | None = None
+    harmony_max_iter: int = 10
+
+    # EMBEDDING MODE. When `embedding_key` is set, the correction is PCA -> harmony and the
+    # result is written to `obsm[embedding_key]`, leaving `X` (and the normalized marker
+    # layer) untouched. Point `leiden.use_embedding` at the same key to cluster on the
+    # integrated space while cluster LABELS keep coming from uncorrected marker values.
+    # This exists because correcting markers in place is self-defeating here: harmony
+    # integrates by distorting the very intensities the signature table interprets, which
+    # relabelled 69k keratin-high (KRT8 +0.97, CK-LMW +1.21) host-epithelial cells as
+    # Fibroblast CAF -- a row whose own positives (Vimentin +1, CD34 +0.3) those cells do
+    # not meet. Separating the two representations lets integration and annotation each use
+    # the one they need. Standard scRNA-seq practice, and it keeps scyan on clean markers.
+    embedding_key: str | None = None
+    embedding_n_pcs: int = 30
 
 
 class PhenotypeScyanCfg(BaseModel):
     """Scyan engine (Bayesian normalizing-flow probabilistic per-cell assignment).
 
-    Consumes the arcsinh + per-marker z-scored layer (`use_layer`); the signature is
-    turned into a scyan knowledge table (population x marker, -1/1/NaN). Uses torch +
-    lightning, so a GPU (`device`) speeds training substantially.
+    Consumes the arcsinh + per-marker z-scored layer (`use_layer`); the signature CSV is
+    the scyan knowledge table (population x marker, continuous values in [-1, 1]; NaN =
+    unknown). Uses torch + lightning, so a GPU (`device`) speeds training substantially.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -231,6 +274,10 @@ class PhenotypeLeidenCfg(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
     use_layer: str = "zscore"
+    # When set and present in obsm (see `batch.embedding_key`), the kNN graph is built on
+    # this embedding instead of `use_layer`. Cluster LABELS always come from `use_layer`,
+    # so clustering can be batch-integrated while annotation stays on clean markers.
+    use_embedding: str | None = None
     n_neighbors: int = 15
     resolution: float = 1.0
     n_iterations: int = 2

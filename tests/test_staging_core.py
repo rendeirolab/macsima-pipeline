@@ -19,6 +19,7 @@ pytest.importorskip("tifffile")
 
 import tifffile as tf
 from macsima_pipeline import staging_core as sc
+from macsima_pipeline.config import StageInCfg
 
 # filter, (emission, excitation)
 _WAVE = {"DAPI": (461.0, 358.0), "FITC": (530.0, 470.0), "APC": (660.0, 650.0)}
@@ -135,6 +136,41 @@ def test_stage_cycle_appends_reference_to_exp2(tmp_path: Path) -> None:
     # exp-2 group had no DAPI acquisition; append_reference must add it -> filename lists DAPI
     f = sorted((root / "rack-01-well-A01-roi-001-exp-2" / "raw").glob("*src-S*.ome.tiff"))[0]
     assert "markers-DAPI__" in f.name  # DAPI first in the marker list
+
+
+def test_stage_roi_with_stage_in_matches_and_cleans_up(tmp_path: Path) -> None:
+    """Staging each cycle folder via node-local storage must not change outputs, and must
+    leave no staged copies behind."""
+    roi = tmp_path / "ROI001"
+    _make_cycle(roi / "6_Cycle1")
+
+    # baseline: read straight from the original folder
+    base_root = tmp_path / "out_base"
+    sc.stage_roi(roi, base_root, illumination_correction=False)
+
+    # staged: copy each cycle folder to a fake RAM disk first
+    ram = tmp_path / "ram"
+    ram.mkdir()
+    staged_root = tmp_path / "out_staged"
+    cfg = StageInCfg(dir=ram, mem_charged=False, working_gb=1)
+    samples = sc.stage_roi(roi, staged_root, illumination_correction=False, stage_in=cfg)
+
+    # identical markers.csv for every sample dir
+    for s in samples:
+        rel = s.relative_to(staged_root)
+        got = pd.read_csv(s / "markers.csv")
+        expected = pd.read_csv(base_root / rel / "markers.csv")
+        pd.testing.assert_frame_equal(got, expected)
+
+    # identical stacked OME-TIFF bytes-per-plane (read back and compare arrays)
+    exp2 = next(s for s in samples if s.name.endswith("exp-2"))
+    for staged_tif in sorted((exp2 / "raw").glob("*.ome.tiff")):
+        base_tif = base_root / exp2.relative_to(staged_root) / "raw" / staged_tif.name
+        assert base_tif.exists()
+        np.testing.assert_array_equal(tf.imread(str(staged_tif)), tf.imread(str(base_tif)))
+
+    # no staged copies leaked
+    assert list(ram.glob("macsima.*")) == []
 
 
 def test_markers_csv_content(tmp_path: Path) -> None:

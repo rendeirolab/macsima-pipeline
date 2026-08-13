@@ -95,6 +95,10 @@ def apply_batch(adata, cfg: PhenotypeBatchCfg) -> None:
     if cfg.batch_key not in adata.obs.columns:
         log.warning("batch_key %r absent from obs; skipping batch correction", cfg.batch_key)
         return
+    if cfg.embedding_key:
+        # Embedding mode: write a corrected embedding, leave X (and the marker layer) alone.
+        _harmony_embedding(adata, cfg)
+        return
     if cfg.method == "zscore_per_roi":
         _zscore_per_batch(adata, cfg.batch_key, cfg.min_cells_per_batch)
     elif cfg.method == "combat":
@@ -103,6 +107,8 @@ def apply_batch(adata, cfg: PhenotypeBatchCfg) -> None:
         sc.pp.combat(adata, key=cfg.batch_key)
     elif cfg.method == "quantile_reference":
         _quantile_reference(adata, cfg.batch_key, cfg.reference)
+    elif cfg.method == "harmony":
+        _harmony(adata, cfg)
 
 
 def _zscore_per_batch(adata, batch_key: str, min_cells: int) -> None:
@@ -121,6 +127,93 @@ def _zscore_per_batch(adata, batch_key: str, min_cells: int) -> None:
             std = np.where(m[mask].std(axis=0) <= 0, 1.0, m[mask].std(axis=0))
         out[mask] = (m[mask] - mean) / std
     adata.X = out.astype(np.float32)
+
+
+def _harmony_kwargs(cfg: PhenotypeBatchCfg) -> dict:
+    kwargs: dict = {"sigma": cfg.harmony_sigma, "max_iter_harmony": cfg.harmony_max_iter, "verbose": False}
+    if cfg.harmony_theta is not None:
+        kwargs["theta"] = cfg.harmony_theta
+    if cfg.harmony_nclust is not None:
+        kwargs["nclust"] = cfg.harmony_nclust
+    return kwargs
+
+
+def _harmony_embedding(adata, cfg: PhenotypeBatchCfg) -> None:
+    """PCA -> Harmony2 -> ``obsm[cfg.embedding_key]``; ``X`` is left untouched.
+
+    This is harmony's intended use (correction on principal components). The embedding is
+    for graph construction only -- marker-based labeling continues to read the uncorrected
+    normalized layer, so integration cannot distort the intensities the signature reads.
+    """
+    import harmonypy
+    import pandas as pd
+
+    m = _to_dense(adata.X).astype(np.float64)
+    batches = adata.obs[cfg.batch_key].astype(str).to_numpy()
+    n_batches = len(np.unique(batches))
+    if n_batches < 2:
+        log.warning("harmony embedding: only %d level(s) of %r; storing uncorrected PCs",
+                    n_batches, cfg.batch_key)
+
+    n_pcs = int(min(cfg.embedding_n_pcs, m.shape[1] - 1, m.shape[0] - 1))
+    # PCA on the z-scored markers (already centred per marker by `normalize`).
+    m = m - m.mean(axis=0, keepdims=True)
+    _, sv, vt = np.linalg.svd(m, full_matrices=False)
+    pcs = m @ vt[:n_pcs].T
+    var_frac = float((sv[:n_pcs] ** 2).sum() / (sv**2).sum())
+    log.info(
+        "harmony embedding: %d cells, %d PCs (%.1f%% variance), %d %r batches -> obsm[%r]",
+        m.shape[0], n_pcs, 100 * var_frac, n_batches, cfg.batch_key, cfg.embedding_key,
+    )
+
+    if n_batches < 2:
+        adata.obsm[cfg.embedding_key] = np.ascontiguousarray(pcs, dtype=np.float32)
+        return
+
+    res = harmonypy.run_harmony(
+        pcs, pd.DataFrame({cfg.batch_key: batches}), [cfg.batch_key], **_harmony_kwargs(cfg)
+    )
+    z = np.asarray(res.Z_corr)
+    if z.shape != pcs.shape:  # harmonypy 2.x returns (n_cells, n_dims); older transposed
+        z = z.T
+    if z.shape != pcs.shape:
+        raise ValueError(f"harmony returned shape {np.asarray(res.Z_corr).shape}, expected {pcs.shape}")
+    adata.obsm[cfg.embedding_key] = np.ascontiguousarray(z, dtype=np.float32)
+
+
+def _harmony(adata, cfg: PhenotypeBatchCfg) -> None:
+    """Harmony2 (harmonypy >= 2.0) applied directly in marker space.
+
+    Harmony is normally run on principal components, but the correction it applies is a
+    linear per-soft-cluster shift, so any embedding is a valid input space. Running it on
+    the marker matrix keeps `X` interpretable and lets both engines (which read a
+    marker-space layer) consume the result unchanged.
+    """
+    import harmonypy
+    import pandas as pd
+
+    m = _to_dense(adata.X).astype(np.float64)
+    batches = adata.obs[cfg.batch_key].astype(str).to_numpy()
+    n_batches = len(np.unique(batches))
+    if n_batches < 2:
+        log.warning("harmony: only %d level(s) of %r; skipping", n_batches, cfg.batch_key)
+        return
+
+    kwargs = _harmony_kwargs(cfg)
+
+    log.info(
+        "harmony: correcting %d cells x %d markers over %d %r batches",
+        m.shape[0], m.shape[1], n_batches, cfg.batch_key,
+    )
+    res = harmonypy.run_harmony(m, pd.DataFrame({cfg.batch_key: batches}), [cfg.batch_key], **kwargs)
+
+    z = np.asarray(res.Z_corr)
+    # harmonypy 2.x returns (n_cells, n_markers); older releases returned it transposed.
+    if z.shape != m.shape:
+        z = z.T
+    if z.shape != m.shape:
+        raise ValueError(f"harmony returned shape {np.asarray(res.Z_corr).shape}, expected {m.shape}")
+    adata.X = np.ascontiguousarray(z, dtype=np.float32)
 
 
 def _quantile_reference(adata, batch_key: str, reference: str | None) -> None:

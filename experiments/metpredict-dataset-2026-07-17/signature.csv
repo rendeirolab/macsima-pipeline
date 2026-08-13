@@ -1,0 +1,107 @@
+# =============================================================================
+# Cell-type signature - metpredict (mouse-host breast cancer PDX; primary + lung met)
+# Rebuilt 2026-07 from the Winkler-lab marker->phenotype reference table.
+# scyan-native CSV: rows = populations, columns = markers, values in [-1, 1]
+# (blank = unknown). scyan uses the values directly (graded weights are real priors);
+# Leiden uses only their sign. The reserved `parent` column is the coarse label.
+# =============================================================================
+# HOW TO EDIT THIS TABLE (scyan cost model - scyan/module/distribution.py).
+# Per marker, a population's log-probability gets:
+#     blank/NA             -0.755   (free: NA markers are clamped, not scored)
+#     value satisfied      +0.467
+#     value off by d        0.467 - d^2 / (2 * prior_std^2)     [prior_std = 0.25]
+# So a blank is CHEAP, and filling a cell only pays off if the data really reaches
+# that value - past d ~= 0.39 a blank scores strictly better. Do NOT blanket-fill
+# inferred negatives to "even out" the table: on z-scored imaging data an absent
+# marker sits near 0, not at -1, so each inferred -1 becomes an expensive violated
+# constraint. Tried that (all keratins/lineage markers filled on every row) and it
+# took scyan from 6 to 15 of 17 populations unpredicted. Fill only markers that are
+# strongly bimodal and genuinely measured for that population.
+#
+# SPECIES BACKBONE (PDX). CD298 (pan-human ATP1B3) is the anchor because it is the only
+# species marker present in EVERY panel: hLaminB1/mLaminB were stained in Expr38 only,
+# so in Expr34/Expr37 (and any joint run including them) both lamin columns are dropped
+# by the loader. CD298 is therefore set on ALL 17 rows (+1 human graft, -1 mouse host),
+# not just the tumor rows. Leaving it blank on the host rows was the main defect: the
+# host rows were species-agnostic while every tumor row demanded CD298 +1, so any
+# CD298-weak tumor cell scored better as Fibroblast CAF (no CD298 constraint at all)
+# and that one row took 53% of the dataset. The lamin columns are filled the same way
+# for Expr38 runs. Immune = CD45+.
+#
+# Tumor EMP axis (4 states): Epithelial-like(luminal) -> Intermediate EMP -> Mesenchymal-like,
+# plus Basal. Graded weights encode the continuum (e.g. Intermediate EMP carries CD326/CD324
+# at 0.5 and Vimentin/ZEB1/Slug at 0.5).
+#
+# Myeloid scRNA "programs" from the reference are folded into the canonical types they mark
+# (no separate "program" populations, which scyan cannot resolve as discrete types):
+#   program 8  (lung MDSC/granulocyte): PRTN3, SAA3, S100a9-a8 -> Neutrophil; YM-1/2 -> M2 TAM
+#   program 24 (tumor MDSC/TAM): FNIP2, IL-1R1, IL-1RA, MT1, ADAM8, THBS1, Arginase1 -> M2 TAM
+#   program 17/18 (NCMo differentiation): CD66a, ACE, GRK3 -> non-classical Monocyte
+# IKZF1: the lab column assigns B cell:0.5 (weighted low), used here over the "program 18" note.
+#
+# Ly-6C/CCR2/CX3CR1 follow the canonical monocyte opposition: classical = Ly-6C+ CCR2+
+# CX3CR1-low, non-classical = Ly-6C-low CCR2-low CX3CR1+. The earlier table gave both
+# subsets positive values for all three, so neither could be resolved.
+#
+# Macrophage M1 carries Singlec5 -1 / CD11c -0.5 only to break a degeneracy: it was
+# sign-identical to Alveolar macrophage on every shared marker while AM held two extra
+# satisfiable constraints, so M1 could never win. M2 TAM carries MHCII -0.5 against M1's
+# MHCII +1 for the same reason.
+#
+# Fibroblast CAF has no positive marker in this panel (no PDGFRb/aSMA/podoplanin); it
+# rests on Vimentin/CD34/CD44 plus CD298 -1. Treat its calls as the least confident
+# population here. Lymphatic endothelial/Fibroblast positives are at full strength
+# rather than 0.3-0.5 so they cannot be satisfied by an average cell.
+#
+# NOT type-defining (analyze as per-cell-type readouts, primary vs met): DAPI, Ki-67
+# (proliferation), p53 (stress/mutation), and the signaling/stress markers only where they
+# are not a lineage cue.
+#
+# REVIEW POINTS (easy to adjust in this CSV): (1) 4 tumor EMP states vs coarser 3;
+# (2) programs folded vs an explicit MDSC population; (3) Alveolar-macrophage vs Eosinophil
+# for Singlec5/Siglec-F; (4) Lymphocyte is a single pooled row - the panel carries no
+# CD3/CD19/CD20, so T/B/NK cannot be split.
+# =============================================================================
+#
+# SPECIES-SPECIFIC REAGENTS (measured 2026-07-29 on 848k cells; keratin-high CD45-negative
+# cells split by CD298). Several antibodies in this panel only stain the HUMAN graft, so a
+# mouse-host row must not ask them to be positive. human-vs-mouse median z-score gap:
+#   CD24 +1.76, Cytokeratin-14 +2.25, KRT15 +1.33, CALM5 +1.15, CD326 +1.08  -> human-only
+#   CD324 +0.35, KRT8 +0.28, KRT18 +0.25, Cytokeratin-LMW -0.36              -> cross-reactive
+#   Cytokeratin-5 -0.77 (mouse +1.37, the highest of any group)              -> mouse-higher
+# Hence Normal epithelium (mouse) is CD326 -1, not +1: it was being asked to stain positive
+# for a human-only reagent, which no cell can satisfy. Its mouse identity rests on the
+# cross-reactive keratins (KRT8, Cytokeratin-LMW) plus Cytokeratin-5. KRT18 is blank because
+# mouse epithelium sits at -0.26 on it. Check this table before adding any epithelial marker.
+#
+# Basal tumor Cytokeratin-5 +1 -> +0.5: CK5 is the one keratin measured MOUSE-higher (mouse
+# +1.37 vs human +0.60), so at full weight it pulls mouse basal cells into this human row.
+# Basal-tumor-labelled cells come out CK14-negative (-0.40) / KRT15-negative (-0.26), both
+# human-only markers a real human basal tumour must be positive for. Demoting CK5 did not
+# measurably change the outcome (2.6% -> 2.7%, row satisfaction 0.71 either way) but the
+# reagent data says CK5 cannot carry a human-specific claim.
+#
+# NOT DONE, and deliberately: declaring the human-only reagents negative on all 13 mouse-host
+# rows. Tried it (59 blanks -> -0.5) and it backfired -- Leiden scores a cluster as
+# mean(pos z) - mean(neg z), so negative-heavy rows win on "negative for everything" clusters.
+# Mast cell (2 positives, 4 negatives) went 5.6% -> 12.9% and Lymphatic endothelial
+# 0.2% -> 11.9%, with overall satisfaction flat (0.787 -> 0.777). Add POSITIVE evidence to
+# weak rows instead of negatives.
+population,parent,CD31,Cytokeratin-5,FNIP2,CD144-VeCadherin,PRTN3,Slug,Cytokeratin-14,LYVE-1,NR4A1-Nur77,AHR,EMCN,TIMP3,IL-1R1,MT1,VWF,F480,IL-1RA,Ly-6C,CD11b,SAA3,VEGFR2,CD24,CD66a,KRT18,CD11c,CD44,KRT15,CCR7,CD298,GRK3,ADAM8,Cytokeratin-LMW,Ly-6G,CD14,MHCII,ACE,Arginase1,Singlec5,Vimentin,XCR1-CCXCR1,S100a9-a8,THBS1,YM-1-YM-2,CD326,CX3CR1,CCR2,CD324,CD34,ZEB1,CALM5,KRT8,IKZF1,CD117-cKIT,ADAMST1,Apelin-Receptor,CD45,mLaminB,hLaminB1
+Epithelial-like tumor,Tumor,,,,,,-1,,,,,,,,,,,,,,,,0.3,,1,,,,,1,,,1,,,,,,,-1,,,,,1,,,1,,-1,,1,,,,,-1,-1,1
+Basal tumor,Tumor,,0.5,,,,,1,,,,,,,,,,,,,,,-0.5,,,,0.5,0.5,,1,,,,,,,,,,,,,,,,,,,,,,,,,,,-1,-1,1
+Intermediate EMP tumor,Tumor,,0.5,,,,0.5,0.5,,,,,,,,,,,,,,,1,,,,0.5,1,,1,,,,,,,,,,0.5,,,,,0.5,,,0.5,,0.5,1,,,,,,-1,-1,1
+Mesenchymal-like tumor,Tumor,,,,,,1,,,,,,,,,,,,,,,,,,,,0.5,,,1,,,,,,,,,,1,,,,,-1,,,-1,,1,,-0.5,,,,,-1,-1,1
+Normal epithelium,Host epithelium,-1,0.5,,,,,,,,,,,,,,,,,,,,-0.5,,,,,,,-1,,,1,,,,,,,-1,,,,,-1,,,0.5,,,-0.5,1,,,,,-1,1,-1
+Blood endothelial,Endothelial,1,,,1,,,,-1,,1,1,1,,,1,-1,,,,,1,,,,,,,,-1,,,,,,,0.5,,,,,,,,-1,,,,1,,,,,,1,0.5,-1,1,-1
+Lymphatic endothelial,Endothelial,1,,,1,,,,1,,,,,,,-1,-1,,,,,0.5,,,,,,,,-1,,,,,,,,,,,,,,,,,,,,,,,,,,,-1,1,-1
+Fibroblast CAF,Fibroblast,-1,,,,,,,,,,,,,,-0.5,-1,,,,,,,,,,0.3,,,-1,,,,,,,,,,1,,,,,-1,,,,0.3,,,,,,,,-1,1,-1
+Macrophage M2 TAM,Myeloid,-1,,0.5,,,,,0.7,,,,,0.5,0.5,,1,0.5,,1,,,,,,,,,,-1,,0.5,,-1,0.5,-0.5,,1,,,,,1,1,-1,,,,,,,,,,,,1,1,-1
+Macrophage M1,Myeloid,,,,,,,,,,,,,,,,1,,-1,1,,,,,,-0.5,,,,-1,,,,-1,,1,,-0.5,-1,,,,,,,,,,,,,,,,,,1,1,-1
+Alveolar macrophage,Myeloid,,,,,,,,,,,,,,,,1,,,0.5,,,,,,0.5,,,,-1,,,,-1,,,,,1,,,,,,,,,,,,,,,,,,1,1,-1
+Monocyte classical,Myeloid,,,,,,,,,,,,,,,,-1,,1,1,,,,,,,,,,-1,,,,-1,1,-1,,,,,,,,,,-0.5,1,,,,,,,,,,1,1,-1
+Monocyte non-classical,Myeloid,,,,,,,,,1,,,,,,,,,-0.5,1,,,,0.5,,,,,,-1,1,,,-1,,-1,0.5,,,,,,,,,1,-0.5,,,,,,,,,,1,1,-1
+Neutrophil,Myeloid,,,,,1,,,,,,,,,,,-1,,-1,1,1,,,0.5,,,,,,-1,,0.3,,1,,-1,,,0.5,,,1,,,,,,,,,,,,,,,1,1,-1
+Dendritic cell,Myeloid,,,,,,,,,,,,,,,,-1,,,,,,,,,1,,,1,-1,,,,-1,,0.8,,,,,1,,,,,,0.7,,,,,,,,,,1,1,-1
+Mast cell,Myeloid,-1,,,,,,,,,,,,,,,-1,,,-1,,,,,,,,,,-1,,,,-1,,,,,,,,,,,,,,,,,,,,1,,,1,1,-1
+Lymphocyte,Lymphoid,-1,,,,,,,,,,,,,,,-1,,,-1,,,,,,-1,,,,-1,,,,-1,,0.3,,,,,,,,,,,,,,,,,0.5,,,,1,1,-1

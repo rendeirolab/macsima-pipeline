@@ -74,7 +74,9 @@ def _obs_with_roi(adata) -> pd.DataFrame:
     obs = adata.obs.copy()
     if "ROI" not in obs.columns:
         obs["ROI"] = "all"
-    obs["ROI"] = obs["ROI"].fillna("missing").astype(str)
+    # Cast before filling: joint phenotyping writes ROI back as a Categorical, and
+    # fillna cannot introduce a category ("missing") that is not already present.
+    obs["ROI"] = obs["ROI"].astype(object).fillna("missing").astype(str)
     return obs
 
 

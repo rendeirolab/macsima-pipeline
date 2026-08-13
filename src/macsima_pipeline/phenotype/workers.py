@@ -122,8 +122,13 @@ def _phenotype_adata(cfg: Config, adata, *, batch=None):
             "engines": list(results.keys()),
             "primary_engine": pcfg.primary_engine,
             "signature": {
-                name: {"positive": list(ct.positive), "negative": list(ct.negative), "parent": ct.parent}
-                for name, ct in sig.cell_types.items()
+                "populations": sig.cell_type_names(),
+                "markers": sig.all_markers(),
+                "parents": {n: sig.parents.get(n) for n in sig.cell_type_names()},
+                "priors": {
+                    str(name): {m: float(v) for m, v in row.items() if pd.notna(v)}
+                    for name, row in sig.table.iterrows()
+                },
             },
             "normalize": pcfg.normalize.model_dump(),
             "batch": batch.model_dump(),

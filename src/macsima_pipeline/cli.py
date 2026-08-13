@@ -61,9 +61,9 @@ def _expand(config: Path, only: list[str] | None = None) -> list[Path]:
 def panel(config: Path, only: list[str] | None = None, force: bool = False) -> None:
     """Pre-staging: sanity-check the marker panel + scaffold the phenotyping signature.
 
-    For each experiment writes artifacts/<exp>/marker_panel.csv; then unions the markers
-    across experiments and writes ONE editable signature.yaml next to the config (skipped
-    if it exists — pass --force to regenerate). Curate it before submitting jobs.
+    For each experiment writes results/<exp>/panel/marker_panel.csv; then unions the
+    markers across experiments and writes ONE editable signature.csv next to the config
+    (skipped if it exists — pass --force to regenerate). Curate it before submitting jobs.
     """
     markers: list[str] = []
     seen = False
@@ -75,7 +75,7 @@ def panel(config: Path, only: list[str] | None = None, force: bool = False) -> N
         markers.extend(str(m) for m in df["marker_name"])
         seen = True
     if seen:
-        dest = config.parent / "signature.yaml"
+        dest = config.parent / "signature.csv"
         scaffold.write_signature_template(config.parent.name, list(dict.fromkeys(markers)), dest, force=force)
 
 

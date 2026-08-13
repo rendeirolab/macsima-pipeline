@@ -9,6 +9,52 @@ extends: "../../configs/default.yaml"
 mcmicro:
   background_subtraction: "auto"      # shared by every experiment
 
+phenotype:
+  # Shared curated signature (scyan-native CSV). Drives phenotyping for all three
+  # experiments; set to null to skip the phenotype stage.
+  signature_matrix: "experiments/metpredict-dataset-2026-07-17/signature.csv"
+
+  # Leiden, not scyan, provides the primary labels here. 17 populations over a 56-marker
+  # panel leaves the knowledge table 82% NA (64% even after dropping every marker used by
+  # fewer than 3 populations), which is too sparse to identify scyan's normalizing flow:
+  # it converges on internally inconsistent calls -- e.g. the cells it assigned to
+  # "Monocyte non-classical" had median CD45 of -0.71 while that row requires CD45 = +1.
+  # Leiden scores clusters on marker sign, so sparse rows degrade gracefully instead of
+  # degenerating. scyan still runs and its labels stay in obs['scyan_celltype'] as a
+  # cross-check (obs['pheno_agree'] flags where the two engines differ).
+  # Revisit if the table is ever coarsened to ~9 populations, which would let scyan fit.
+  primary_engine: "leiden"
+
+  # Batch integration for the JOINT run. ROI (nested in experiment) carries a strong
+  # MULTIVARIATE effect: with ComBat equalising every per-experiment marker mean and
+  # variance exactly, a linear classifier dropped to chance (0.436 vs 0.424) yet 15-NN
+  # neighbourhoods were still 73.6% same-ROI against a 3.0% mixed baseline, so clusters
+  # stayed 99.2% experiment-pure. Per-marker location/scale methods cannot touch that.
+  #
+  # `embedding_key` therefore runs PCA -> Harmony2 into obsm[X_harmony] and leaves the
+  # marker layer untouched; `leiden.use_embedding` clusters on it while cluster LABELS keep
+  # coming from uncorrected markers. Correcting markers in place was self-defeating --
+  # harmony integrates by distorting the intensities the signature interprets, which
+  # relabelled 69k keratin-high host-epithelial cells as Fibroblast CAF and drove marker
+  # coherence down to 0.419. On the embedding it rises to 1.31, above the uncorrected 1.26.
+  # Net: cells in >90%-experiment-pure clusters 99.7% -> 23.2%.
+  #
+  # batch_key is overridden by `phenotype-joint --batch-key` (default "sample" =
+  # experiment|ROI, 46 levels, which is the unit that matters). A per-experiment run has no
+  # `sample` column, so it logs a warning, skips correction and clusters on markers.
+  batch:
+    method: "harmony"           # harmonypy >= 2.0 (Harmony2)
+    batch_key: "sample"
+    embedding_key: "X_harmony"  # set => PCA+harmony into obsm, X left alone
+    embedding_n_pcs: 30
+    harmony_theta: 2.0          # swept 0.5/1.0/2.0; 2.0 integrates best on the embedding
+  leiden:
+    use_embedding: "X_harmony"
+    # 1.5 over the 1.0 default: at theta 2.0 host epithelium goes 1.9% -> 4.9% with purity
+    # essentially unchanged (21.1% -> 23.2%). Higher still keeps helping host epithelium
+    # (8.2% at 3.0) but degrades integration to 39.8% purity, so 1.5 is the knee.
+    resolution: 1.5
+
 experiments:
   - name: expr34
     raw_root: "/research/lab_rendeiro/projects/metpredict/data/MACSima/Expr34_260528_091615/Expr34_2026-05-21_12-19-04/RawData/R1/B1"

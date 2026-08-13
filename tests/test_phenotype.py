@@ -13,39 +13,41 @@ from macsima_pipeline.phenotype import signature as sig_mod
 #  Signature matrix                                                           #
 # --------------------------------------------------------------------------- #
 
-_SIGNATURE_YAML = """\
-version: 1
-cell_types:
-  T cell:     {positive: [CD3, CD45], negative: [CD19, CD68], parent: Immune}
-  CD8 T cell: {positive: [CD3, CD8],  negative: [CD4],        parent: T cell}
-  CD4 T cell: {positive: [CD3, CD4],  negative: [CD8],        parent: T cell}
-  B cell:     {positive: [CD19],      negative: [CD3, CD68],  parent: Immune}
-  Macrophage: [CD68, CD45]
+# scyan-native CSV: rows = populations, columns = markers, values in [-1, 1] (blank =
+# unknown), reserved `parent` column for the coarse label. Macrophage carries a graded
+# 0.5 to exercise continuous priors, and no parent.
+_SIGNATURE_CSV = """\
+# test signature
+population,parent,CD3,CD45,CD8,CD4,CD19,CD68
+T cell,Immune,1,1,,,-1,-1
+CD8 T cell,T cell,1,,1,-1,,
+CD4 T cell,T cell,1,,-1,1,,
+B cell,Immune,-1,,,,1,-1
+Macrophage,,,0.5,,,,1
 """
 
 
-def _write_signature(tmp_path: Path, text: str = _SIGNATURE_YAML) -> Path:
-    p = tmp_path / "signature.yaml"
+def _write_signature(tmp_path: Path, text: str = _SIGNATURE_CSV) -> Path:
+    p = tmp_path / "signature.csv"
     p.write_text(text)
     return p
 
 
-def test_signature_load_and_shorthand(tmp_path: Path) -> None:
+def test_signature_load(tmp_path: Path) -> None:
     sig = sig_mod.load_signature(_write_signature(tmp_path))
-    assert sig.version == 1
     assert set(sig.cell_type_names()) == {"T cell", "CD8 T cell", "CD4 T cell", "B cell", "Macrophage"}
-    # positive-only shorthand parsed with empty negatives
-    mac = sig.cell_types["Macrophage"]
-    assert mac.positive == ("CD68", "CD45")
-    assert mac.negative == ()
-    assert mac.parent is None
-    assert sig.to_marker_dict()["CD8 T cell"] == ["CD3", "CD8"]
+    assert sig.all_markers() == ["CD3", "CD45", "CD8", "CD4", "CD19", "CD68"]
+    # graded value preserved; blank -> NaN; missing parent -> None
+    assert sig.table.loc["Macrophage", "CD45"] == 0.5
+    assert np.isnan(sig.table.loc["Macrophage", "CD3"])
+    assert sig.parents["Macrophage"] is None
+    assert sig.parents["CD8 T cell"] == "T cell"
 
 
 def test_signature_coarse_map(tmp_path: Path) -> None:
     sig = sig_mod.load_signature(_write_signature(tmp_path))
     coarse = sig.coarse_map()
-    # leaf -> root ancestor; "Immune" is a lineage label (not a defined cell type) and terminates
+    # leaf -> root ancestor; "Immune" is a lineage label (not a population) and terminates
     assert coarse["CD8 T cell"] == "Immune"
     assert coarse["CD4 T cell"] == "Immune"
     assert coarse["T cell"] == "Immune"
@@ -64,30 +66,38 @@ def test_signature_score_matrix(tmp_path: Path) -> None:
     assert b[markers.index("CD19")] == 1.0
     assert b[markers.index("CD3")] == -1.0
     assert b[markers.index("CD68")] == -1.0
-    assert b[markers.index("CD8")] == 0.0
+    assert np.isnan(b[markers.index("CD8")])  # unknown -> NaN (not 0)
+    # continuous prior flows through unchanged
+    assert mat[names.index("Macrophage")][markers.index("CD45")] == 0.5
 
 
 def test_signature_validate_warns_on_missing_but_keeps_usable(tmp_path: Path, caplog) -> None:
     sig = sig_mod.load_signature(_write_signature(tmp_path))
     panel = ["DAPI", "CD3", "CD8", "CD4", "CD19", "CD68", "CD45"]
     with caplog.at_level("WARNING"):
-        usable = sig_mod.load_signature(_write_signature(tmp_path)).validate_against(panel)
+        usable = sig.validate_against(panel)
     # every referenced marker is present here -> no missing warning, usable in panel order
     assert usable == ["CD3", "CD8", "CD4", "CD19", "CD68", "CD45"]
-    assert sig.cell_type_names()  # sanity
 
 
-def test_signature_validate_raises_when_type_loses_all_positives(tmp_path: Path) -> None:
+def test_signature_validate_raises_when_type_loses_all_markers(tmp_path: Path) -> None:
     sig = sig_mod.load_signature(_write_signature(tmp_path))
-    # panel lacks CD68 and CD45 -> Macrophage (positives CD68, CD45) has no usable positive
+    # panel lacks CD68 and CD45 -> Macrophage has no informative marker present
     with pytest.raises(ValueError, match="Macrophage"):
         sig.validate_against(["CD3", "CD8", "CD4", "CD19"])
 
 
-def test_signature_requires_cell_types(tmp_path: Path) -> None:
-    p = tmp_path / "bad.yaml"
-    p.write_text("version: 1\n")
-    with pytest.raises(ValueError, match="cell_types"):
+def test_signature_requires_populations(tmp_path: Path) -> None:
+    p = tmp_path / "bad.csv"
+    p.write_text("# just a header\npopulation,parent,CD3\n")
+    with pytest.raises(ValueError, match="no populations"):
+        sig_mod.load_signature(p)
+
+
+def test_signature_rejects_out_of_range(tmp_path: Path) -> None:
+    p = tmp_path / "bad.csv"
+    p.write_text("population,parent,CD3\nT cell,,2\n")
+    with pytest.raises(ValueError, match="lie in"):
         sig_mod.load_signature(p)
 
 
@@ -310,11 +320,10 @@ def test_write_atomic_and_phenotype_done(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 _ADAPTER_SIG = """\
-version: 1
-cell_types:
-  T cell: [CD3, CD45]
-  B cell: [CD19]
-  Macrophage: [CD68]
+population,parent,CD3,CD45,CD19,CD68
+T cell,,1,1,,
+B cell,,,,1,
+Macrophage,,,,,1
 """
 
 
@@ -327,8 +336,8 @@ def test_scyan_adapter_thresholds_low_confidence(tmp_path: Path, monkeypatch) ->
     from macsima_pipeline.config import PhenotypeScyanCfg
     from macsima_pipeline.phenotype.engines import scyan as scyan_engine
 
-    (tmp_path / "s.yaml").write_text(_ADAPTER_SIG)
-    sig = sig_mod.load_signature(tmp_path / "s.yaml")
+    (tmp_path / "s.csv").write_text(_ADAPTER_SIG)
+    sig = sig_mod.load_signature(tmp_path / "s.csv")
 
     a = _make_adata(n=6)
     a.layers["zscore"] = a.X.copy()  # adapter reads the scaled layer
@@ -476,10 +485,10 @@ def _build_cfg(tmp_path: Path):
     (tmp_path / "exp.yaml").write_text(
         "extends: default.yaml\nexperiment:\n  name: pheno\n  raw_root: /tmp/raw\n"
     )
-    (tmp_path / "signature.yaml").write_text(_ADAPTER_SIG)
+    (tmp_path / "signature.csv").write_text(_ADAPTER_SIG)
     cfg = load_config(tmp_path / "exp.yaml")
     cfg.paths.work_dir = tmp_path
-    cfg.phenotype.signature_matrix = Path("signature.yaml")
+    cfg.phenotype.signature_matrix = Path("signature.csv")
     cfg.phenotype.spatial_qc.enabled = False  # skip squidpy in the contract test
     return cfg
 

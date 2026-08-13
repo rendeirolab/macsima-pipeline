@@ -36,8 +36,15 @@ def render_sbatch(
     template_stage: str | None = None,
     slurm_stage: str | None = None,
     output_stage: str | None = None,
+    mem_override: str | None = None,
+    stage_in_dir: str | None = None,
 ) -> str:
-    """Render `templates/{stage}.sbatch.j2` with stage SLURM block + body command."""
+    """Render `templates/{stage}.sbatch.j2` with stage SLURM block + body command.
+
+    `mem_override` replaces the stage's `--mem` (used when staging inputs to a RAM disk
+    inflates the memory footprint). `stage_in_dir` is the raw, un-expanded staging path
+    passed to the template's cleanup `trap`; None (the default) leaves both untouched.
+    """
     template_stage = template_stage or stage
     slurm_stage = slurm_stage or stage
     output_stage = output_stage or stage
@@ -45,15 +52,19 @@ def render_sbatch(
     slurm: SlurmStage = cfg.slurm.stage(slurm_stage)
     env = _env()
     tmpl = env.get_template(f"{template_stage}.sbatch.j2")
+    slurm_ctx = slurm.model_dump()
+    if mem_override:
+        slurm_ctx["mem"] = mem_override
     ctx = {
         "stage": stage,
         "experiment": cfg.experiment.name,
-        "slurm": slurm.model_dump(),
+        "slurm": slurm_ctx,
         "account": cfg.slurm.account,
         "array_size": array_size,
         "log_path": str(cfg.log_path(output_stage)),
         "body_cmd": body_cmd,
         "jobs_csv": str(cfg.jobs_csv(output_stage)),
+        "stage_in_dir": stage_in_dir,
     }
     if extra_ctx:
         ctx.update(extra_ctx)

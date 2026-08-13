@@ -112,7 +112,7 @@ def test_generate_returns_frame_and_scaffolds_signature(tmp_path: Path) -> None:
     assert "marker_name" in df.columns
 
     # the CLI unions marker_name across experiments, then scaffolds one shared signature
-    dest = tmp_path / "signature.yaml"
+    dest = tmp_path / "signature.csv"
     out = scaffold.write_signature_template("tx", list(dict.fromkeys(df["marker_name"])), dest)
     assert out == dest
     sig = sig_mod.load_signature(out)

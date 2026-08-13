@@ -1,0 +1,23 @@
+# Example signature matrix for the phenotype stage (scyan-native CSV).
+#
+# Rows are cell-type populations; columns are markers; each value is the expected
+# relative expression in [-1, 1] (blank = unknown / not informative). scyan uses the
+# values directly (a graded 0.5 is a weaker prior than 1); Leiden uses only their sign.
+# The reserved `parent` column sets the coarse label (leaf -> lineage; a parent that is
+# not itself a population, e.g. "Immune", becomes the coarse class). '#' lines are
+# ignored by the loader, so keep notes here.
+#
+# Copy this to your experiment dir, edit for YOUR panel + tissue, and point
+# `phenotype.signature_matrix` at it (path relative to paths.work_dir). Marker names
+# must match adata.var_names; markers absent from the panel are dropped with a warning
+# (a population that keeps no marker is an error).
+population,parent,CD3,CD45,CD4,CD8,CD19,CD20,CD56,CD68,CD163,CD11c,HLADR,CD31,PanCK,EpCAM
+T cell,Immune,1,1,,,-1,,,-1,,,,,,
+CD4 T cell,T cell,1,,1,-1,,,,,,,,,,
+CD8 T cell,T cell,1,,-1,1,,,,,,,,,,
+B cell,Immune,-1,,,,1,1,,-1,,,,,,
+NK cell,Immune,-1,,,,-1,,1,,,,,,,
+Macrophage,Myeloid,-1,,,,-1,,,1,1,,,,,
+Dendritic,Myeloid,-1,,,,,,,,,1,1,,,
+Endothelial,Stroma,,-1,,,,,,,,,,1,,
+Epithelial,Epithelium,,-1,,,,,,,,,,,1,1

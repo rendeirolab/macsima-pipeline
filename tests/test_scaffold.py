@@ -88,7 +88,7 @@ def test_roi_metadata_missing_raw_root_returns_none(tmp_path: Path) -> None:
 
 def test_write_signature_template_builds_loadable(tmp_path: Path) -> None:
     markers = ["DAPI", "CD3", "CD45", "CD8", "CD4", "CD19", "CD20", "PanCK"]
-    dest = tmp_path / "signature.yaml"
+    dest = tmp_path / "signature.csv"
     out = scaffold.write_signature_template("tx", markers, dest)
     assert out == dest
 
@@ -97,21 +97,24 @@ def test_write_signature_template_builds_loadable(tmp_path: Path) -> None:
     sig = sig_mod.load_signature(out)
     names = set(sig.cell_type_names())
     assert {"T cell", "CD4 T cell", "CD8 T cell", "B cell", "Epithelial"} <= names
-    assert list(sig.cell_types["T cell"].positive) == ["CD3", "CD45"]  # CD3e absent from panel
+    # T cell positives present in the panel are +1; CD3e (absent) is not a column
+    assert sig.table.loc["T cell", "CD3"] == 1.0
+    assert sig.table.loc["T cell", "CD45"] == 1.0
+    assert "CD3e" not in sig.all_markers()
     txt = out.read_text()
-    assert "PanCK" in txt and "version: 1" in txt
+    assert "PanCK" in txt and "population,parent" in txt
 
 
 def test_write_signature_template_empty_markers_returns_none(tmp_path: Path) -> None:
-    assert scaffold.write_signature_template("tx", [], tmp_path / "signature.yaml") is None
+    assert scaffold.write_signature_template("tx", [], tmp_path / "signature.csv") is None
 
 
 def test_write_signature_template_skips_existing_unless_force(tmp_path: Path) -> None:
     markers = ["DAPI", "CD3", "CD45"]
-    dest = tmp_path / "signature.yaml"
+    dest = tmp_path / "signature.csv"
     dest.write_text("KEEP\n")
     assert scaffold.write_signature_template("tx", markers, dest) is None
     assert dest.read_text() == "KEEP\n"  # curated edits never clobbered
     out = scaffold.write_signature_template("tx", markers, dest, force=True)
     assert out == dest
-    assert "version: 1" in dest.read_text()
+    assert "population,parent" in dest.read_text()

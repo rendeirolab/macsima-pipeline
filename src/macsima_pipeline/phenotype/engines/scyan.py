@@ -2,8 +2,9 @@
 
 Wraps the ``scyan`` package (Blampey et al.). Scyan consumes scaled expression (the
 arcsinh + per-marker z-scored layer) plus a knowledge table (population x marker,
-values -1/1/NaN) built from the signature matrix, and returns per-cell population
-probabilities + hard labels, with unassigned / low-confidence cells marked "Unknown".
+continuous values in [-1, 1]; NaN = unknown/masked) taken directly from the signature
+matrix, and returns per-cell population probabilities + hard labels, with unassigned /
+low-confidence cells marked "Unknown".
 
 Input: the normalized z-scored layer (``cfg.use_layer``).
 """
@@ -56,9 +57,11 @@ def run_scyan(adata, sig: SignatureMatrix, cfg, batch_key: str | None = None) ->
         raise ValueError("no signature markers present in the panel for scyan")
     col_idx = [panel.index(m) for m in markers]
 
-    # knowledge table: population x marker, +1 positive / -1 negative / NaN otherwise
+    # knowledge table: population x marker, continuous values in [-1, 1]; NaN = unknown.
+    # Values are used as-is (scyan treats each as a Gaussian prior mode); a graded 0.4
+    # stays 0.4 rather than being forced to +-1.
     names = sig.cell_type_names()
-    table = pd.DataFrame(sig.score_matrix(markers), index=names, columns=markers).replace(0.0, np.nan)
+    table = pd.DataFrame(sig.score_matrix(markers), index=names, columns=markers)
 
     use_batch = bool(cfg.include_batch_covariate and batch_key and batch_key in adata.obs.columns)
     obs = pd.DataFrame(index=pd.Index([str(i) for i in range(adata.n_obs)]))

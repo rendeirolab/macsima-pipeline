@@ -76,7 +76,7 @@ experiment:
     assert cfg.phenotype.normalize.transform == "arcsinh"
     assert cfg.phenotype.normalize.store_raw_layer == "counts"
     assert cfg.phenotype.normalize.normalized_layer == "zscore"
-    assert cfg.phenotype.batch.method == "zscore_per_roi"
+    assert cfg.phenotype.batch.method == "none"
     assert cfg.phenotype.scyan.use_layer == "zscore"
     assert cfg.phenotype.leiden.use_layer == "zscore"
     assert cfg.phenotype.scyan.prior_std == 0.25

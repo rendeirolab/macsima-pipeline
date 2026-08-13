@@ -1378,6 +1378,25 @@ wheels = [
 ]
 
 [[package]]
+name = "harmonypy"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/a5/1cf1b76a6e0e04f320d1193eaa548b2f57b30c38649a9b463b7843c1ddf9/harmonypy-2.0.0.tar.gz", hash = "sha256:98c18954781aec9a82aaec3cde3764d89fd2ef93e84ece6724bc0f25b37244ed", size = 35462, upload-time = "2026-04-26T15:38:59.408Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/3a/f798bdfd7d19dc2bcb818c086589f4bfa0c6b350b8a7f5386b2555b8c667/harmonypy-2.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:7e2d53eca5ae3acc4456954d97c3ebd472f7820bb51449dcc3e09bce2d15bb39", size = 146855, upload-time = "2026-04-26T15:38:38.763Z" },
+    { url = "https://files.pythonhosted.org/packages/04/64/97ad877dfecc15b3a1cca1073d5b958ae5e35ead37cebeed91e76d361894/harmonypy-2.0.0-cp312-cp312-macosx_11_0_x86_64.whl", hash = "sha256:9f8cf957dcdbea3f656817b8fdd9b533eb91fdf6d9c412ebafccc9766b80d6d0", size = 158568, upload-time = "2026-04-26T15:38:40.266Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/aa/ddb7f72a3d41c1f4a9acda36683d0c6145d23ccbce27aeaf9608638bd59a/harmonypy-2.0.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:571bca6eeafb7f99a4dbef2220b5db1ab8b19f633f2f9d2ca48df209e7444c17", size = 4700408, upload-time = "2026-04-26T15:38:41.825Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/8d/336fb8b053ae9de7614da458c0f7d5d1d9654a52ba6178bbe174955dad21/harmonypy-2.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:faae5ea957f8ced3b4b2224b2be82134f545ee7db3caae8ce1e787f21e0dbd6f", size = 10498620, upload-time = "2026-04-26T15:38:43.846Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/7d/669a9c9a12bc6224645d5fa6f87108819a46879cd08ae29f2bbfedbe9d5d/harmonypy-2.0.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:64b376abac3638f086a2b8f89c936b84bbde98eb548c5ab969ffff1f2ebaa6f5", size = 146802, upload-time = "2026-04-26T15:38:45.792Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/11/487157aa3d666f114635226dfdfae4779a5ae80b4cd2214181ef5ed8067e/harmonypy-2.0.0-cp313-cp313-macosx_11_0_x86_64.whl", hash = "sha256:f22c53c2bb77357856aed808e6e975496496c305ecee44c17d1b90855533e7e4", size = 158510, upload-time = "2026-04-26T15:38:47.309Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/62/ca941cc5316accf915de57305e7a85891c2d69588b1c78ad4e05ff51ad3e/harmonypy-2.0.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:08d802dd410cb02562205e1bedfdab22000c72b97e4469fec9decb01cb629d63", size = 4700381, upload-time = "2026-04-26T15:38:48.729Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/9c/15595ef2944c7f6c6740dc2501409972082ef1d512f9a9f9b24e091207a2/harmonypy-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:05f79d49dc7e0332ed6a0b0303f726a4e870defe971e2687c40a8de1ce53098b", size = 10498578, upload-time = "2026-04-26T15:38:50.552Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -2016,6 +2035,7 @@ dependencies = [
     { name = "cellpose" },
     { name = "cyclopts" },
     { name = "dask-image" },
+    { name = "harmonypy" },
     { name = "igraph" },
     { name = "imagecodecs" },
     { name = "jinja2" },
@@ -2059,6 +2079,7 @@ requires-dist = [
     { name = "cellpose", specifier = ">=4.0.8" },
     { name = "cyclopts", specifier = ">=3.0" },
     { name = "dask-image", specifier = ">=2025.11.0" },
+    { name = "harmonypy", specifier = ">=2.0.0" },
     { name = "igraph", specifier = ">=0.10" },
     { name = "imagecodecs", specifier = ">=2025.11.11" },
     { name = "jinja2", specifier = ">=3.1" },

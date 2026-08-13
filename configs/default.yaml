@@ -30,10 +30,18 @@ staging:
   remove_reference_marker: false  # mark DAPI remove=TRUE after the first cycle
   output_subdir: "raw"
   cycle_glob: "*Cycle*"           # cycle folders per ROI; excludes the *Scan2 autofluorescence scan
+  stage_in:                       # optional: copy each cycle folder to fast local storage before reading
+    dir: null                     # null = OFF. Set a path to enable: RAM disk (e.g. /dev/shm) or
+                                  #   node-local scratch (e.g. "$SLURM_TMPDIR", "/scratch/local/$USER").
+                                  #   $VARs are expanded at runtime. Cluster-agnostic — no default location.
+    mem_charged: true             # true for a RAM disk (tmpfs counts against --mem); false for node-local disk
+    working_gb: 32                # process headroom added to --mem when mem_charged (bump = folder size + this)
+    safety: 1.15                  # multiplier applied to the staged size when sizing --mem
+    cap_gb: 200                   # hard ceiling on the auto-computed --mem
 
 panel:
   # Marker-panel sanity summary, generated before staging. (The `panel` command also
-  # scaffolds the phenotyping signature.yaml next to the config — curate it before submit.)
+  # scaffolds the phenotyping signature.csv next to the config — curate it before submit.)
   marker_panel_csv: "marker_panel.csv"
 
 mcmicro:
@@ -63,6 +71,14 @@ preprocess:
   parallel:
     max_workers: 4              # SLURM array throttle for GPU preprocess workers
   scale_factors: [2, 4]
+  stage_in:                     # optional: copy the per-ROI mosaic to fast local storage before segmenting
+    dir: null                   # null = OFF. Set a path to enable: RAM disk (e.g. /dev/shm) or
+                                #   node-local scratch (e.g. "$SLURM_TMPDIR", "/scratch/local/$USER").
+                                #   $VARs are expanded at runtime. Cluster-agnostic — no default location.
+    mem_charged: true           # true for a RAM disk (tmpfs counts against --mem); false for node-local disk
+    working_gb: 100             # process headroom added to --mem when mem_charged (bump = mosaic size + this)
+    safety: 1.15                # multiplier applied to the staged size when sizing --mem
+    cap_gb: 200                 # hard ceiling on the auto-computed --mem (mosaics can be 7-81 GB)
 
 viz:
   target_max_dim: 2048          # pick pyramid level whose largest XY dim <= this
@@ -102,7 +118,7 @@ viz:
 
 phenotype:
   enabled: true
-  signature_matrix: null        # path to signature YAML; null -> stage skips (chain still proceeds)
+  signature_matrix: null        # path to signature CSV; null -> stage skips (chain still proceeds)
   engines: ["scyan", "leiden"]
   primary_engine: "scyan"       # which engine populates obs['cell_type']
   coarse_label_key: "cell_type_coarse"
@@ -117,7 +133,18 @@ phenotype:
     store_raw_layer: "counts"   # layer holding raw intensities (kept for provenance)
     normalized_layer: "zscore"  # normalized matrix (scyan + leiden read this)
   batch:
-    method: "zscore_per_roi"    # none|zscore_per_roi|quantile_reference|combat
+    # `none` by default: ROI is confounded with biology, not a technical batch. ROIs differ
+    # in tissue composition (primary vs met, tumour-rich vs immune-rich), and per-ROI
+    # z-scoring centres every marker within each ROI, deleting exactly that signal --
+    # measured on metpredict/expr34 (16 ROIs), it collapsed the between-ROI spread of the
+    # CD45 mean from 3.12 sd to 0.00, and cut CD298 dynamic range (p90-p50) from 1.58 to
+    # 0.94. Whichever ROI is dominated by one cell type has that type centred to z~0, so it
+    # can never satisfy a +1 entry in the signature table; scyan then hands the dataset to
+    # whichever population demands the fewest positives (Fibroblast CAF took 53-80% of
+    # cells). The global per-marker z-score in `normalize` is retained.
+    # Only switch this on when batches really are technical replicates of the same tissue;
+    # to correct genuine staining/run differences prefer batch_key: "experiment".
+    method: "none"              # none|zscore_per_roi|quantile_reference|combat
     batch_key: "ROI"
     reference: null             # reference batch for quantile_reference; null -> cross-batch median
     min_cells_per_batch: 50     # below this, fall back to global stats (avoids degenerate per-ROI z)

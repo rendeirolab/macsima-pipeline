@@ -29,10 +29,16 @@ import re
 import warnings
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import tifffile as tf
+
+from .stagein import staged
+
+if TYPE_CHECKING:
+    from .config import StageInCfg
 
 log = logging.getLogger(__name__)
 
@@ -519,10 +525,13 @@ def stage_roi(
     hi_exposure_only: bool = False,
     out_subdir: str = "raw",
     remove_reference_marker: bool = False,
+    stage_in: StageInCfg | None = None,
 ) -> list[Path]:
     """Stage every cycle folder of one ROI, then write one ``markers.csv`` per sample dir.
 
-    Returns the list of sample dirs written.
+    When ``stage_in`` is configured, each cycle folder is first copied to fast node-local
+    storage (one folder at a time) so the many small raw-tile reads hit local disk/RAM
+    instead of network Lustre. Returns the list of sample dirs written.
     """
     cycles = sorted(p for p in roi_dir.glob(cycle_glob) if p.is_dir())
     if not cycles:
@@ -531,14 +540,15 @@ def stage_roi(
     accumulated: dict[Path, list[dict]] = {}
     for cyc in cycles:
         log.info("staging cycle [stage]%s[/]", cyc.name)
-        contrib = stage_cycle(
-            cyc,
-            sample_root,
-            ref_marker=ref_marker,
-            illumination_correction=illumination_correction,
-            hi_exposure_only=hi_exposure_only,
-            out_subdir=out_subdir,
-        )
+        with staged(cyc, stage_in) as cyc_local:
+            contrib = stage_cycle(
+                cyc_local,
+                sample_root,
+                ref_marker=ref_marker,
+                illumination_correction=illumination_correction,
+                hi_exposure_only=hi_exposure_only,
+                out_subdir=out_subdir,
+            )
         for sample_dir, rows in contrib.items():
             accumulated.setdefault(sample_dir, []).extend(rows)
 
